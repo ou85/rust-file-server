@@ -18,18 +18,15 @@ impl Config {
         Self {
             storage_path: "data/files".to_string(),
             database_path: "data/db".to_string(),
+
             encryption_key: std::env::var("RFS_ENCRYPTION_KEY")
                 .expect("RFS_ENCRYPTION_KEY is not set"),
-
-            user_name: "user".to_string(),    
-            admin_name: "admin".to_string(),    
-
+            user_name: "user".to_string(),
             user_password_hash: std::env::var("RFS_USER_PASSWORD_HASH")
                 .expect("RFS_USER_PASSWORD_HASH is not set"),
-
+            admin_name: "admin".to_string(),
             admin_password_hash: std::env::var("RFS_ADMIN_PASSWORD_HASH")
                 .expect("RFS_ADMIN_PASSWORD_HASH is not set"),
-
             max_preview_size_bytes,
         }
     }
