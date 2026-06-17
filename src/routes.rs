@@ -12,8 +12,8 @@ use axum::{
     response::Redirect,
     routing::{delete, get, post},
 };
-use std::sync::Arc;
 use axum_extra::extract::CookieJar;
+use std::sync::Arc;
 
 pub fn create_router(state: Arc<App>) -> Router {
     Router::new()
@@ -36,10 +36,6 @@ async fn health() -> &'static str {
     "OK"
 }
 
-// pub async fn root() -> Redirect {
-//     Redirect::to("/login")
-// }
-
 pub async fn root(jar: CookieJar) -> impl IntoResponse {
     match jar.get("rfs_role") {
         Some(cookie) if cookie.value() == "user" => {
@@ -59,7 +55,7 @@ async fn login_page() -> Html<&'static str> {
 }
 
 async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> impl IntoResponse {
-    println!("=== Login attempt: {}", req.username);
+    // println!("=== Login attempt: {}", req.username);
     match authenticate(&req.username, &req.password, &app.config) {
         Some(role) => {
             println!("=== Login success");
@@ -88,21 +84,36 @@ async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> im
     }
 }
 
-async fn list_files(State(app): State<Arc<App>>) -> Json<Vec<FileMetadata>> {
-    Json(app.list_files().unwrap())
+async fn list_files(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+) -> Result<Json<Vec<FileMetadata>>, (StatusCode, Json<serde_json::Value>)> {
+    if let Err(e) = require_user(&jar) {
+        return Err(e);
+    }
+
+    Ok(Json(app.list_files().unwrap()))
 }
 
 async fn get_file(
+    jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
-) -> Json<Option<FileMetadata>> {
-    Json(app.get_file(&id).unwrap())
+) -> Result<Json<Option<FileMetadata>>, (StatusCode, Json<serde_json::Value>)> {
+    if let Err(e) = require_user(&jar) {
+        return Err(e);
+    }
+    Ok(Json(app.get_file(&id).unwrap()))
 }
 
 async fn delete_file(
+    jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> (StatusCode, Json<serde_json::Value>) {
+    if let Err(e) = require_user(&jar) {
+        return e;
+    }
     match app.delete_file(&id) {
         Ok(_) => (
             StatusCode::OK,
@@ -141,9 +152,13 @@ async fn delete_file(
 }
 
 async fn download_file(
+    jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> Result<(StatusCode, [(String, String); 2], Vec<u8>), (StatusCode, Json<serde_json::Value>)> {
+    if let Err(e) = require_user(&jar) {
+        return Err(e);
+    }
     let metadata = match app.get_file(&id) {
         Ok(Some(m)) => m,
         _ => {
@@ -187,9 +202,13 @@ async fn download_file(
 }
 
 async fn open_file(
+    jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> Result<(StatusCode, [(String, String); 1], Vec<u8>), (StatusCode, Json<serde_json::Value>)> {
+    if let Err(e) = require_user(&jar) {
+        return Err(e);
+    }
     // get metadata to find out the file name.
     let metadata = match app.get_file(&id) {
         Ok(Some(m)) => m,
@@ -256,10 +275,14 @@ async fn open_file(
     Ok((StatusCode::OK, [("Content-Type".to_string(), mime)], bytes))
 }
 
-pub async fn upload_files(
+async fn upload_files(
+    jar: CookieJar,
     State(app): State<Arc<App>>,
     mut multipart: Multipart,
 ) -> Result<Json<Vec<FileMetadata>>, (StatusCode, String)> {
+    if let Err((code, json)) = require_auth(&jar) {
+        return Err((code, json.to_string()));
+    }
     let mut uploaded = Vec::new();
 
     while let Some(field) = multipart
@@ -306,4 +329,24 @@ async fn logout() -> impl IntoResponse {
             "rfs_role=; Path=/; Max-Age=0; HttpOnly".to_string(),
         )],
     )
+}
+
+fn require_auth(jar: &CookieJar) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    match jar.get("rfs_role") {
+        Some(cookie) if cookie.value() == "user" || cookie.value() == "admin" => Ok(()),
+        _ => Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Unauthorized" })),
+        )),
+    }
+}
+
+fn require_user(jar: &CookieJar) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    match jar.get("rfs_role") {
+        Some(cookie) if cookie.value() == "user" => Ok(()),
+        _ => Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Access denied" })),
+        )),
+    }
 }
