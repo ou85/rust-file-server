@@ -15,6 +15,10 @@ use axum::{
 use axum_extra::extract::CookieJar;
 use std::sync::Arc;
 
+use axum::body::Body;
+// use tokio::fs::File;
+use tokio_util::io::ReaderStream;
+
 pub fn create_router(state: Arc<App>) -> Router {
     Router::new()
         .route("/", get(root))
@@ -28,6 +32,7 @@ pub fn create_router(state: Arc<App>) -> Router {
         .layer(DefaultBodyLimit::disable())
         .route("/files/{id}", delete(delete_file))
         .route("/files/{id}/open", get(open_file))
+        .route("/files/{id}/stream", get(stream_file))
         .route("/files/{id}/download", get(download_file))
         .with_state(state)
 }
@@ -349,4 +354,55 @@ fn require_user(jar: &CookieJar) -> Result<(), (StatusCode, Json<serde_json::Val
             Json(serde_json::json!({ "error": "Access denied" })),
         )),
     }
+}
+
+async fn stream_file(
+    jar: CookieJar,
+    Path(id): Path<String>,
+    State(app): State<Arc<App>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    if let Err(e) = require_auth(&jar) {
+        return Err(e);
+    }
+
+    let metadata = match app.get_file(&id) {
+        Ok(Some(m)) => m,
+        _ => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "File not found", "id": id })),
+            ));
+        }
+    };
+
+    // 1. Decrypt into a temporary file
+    let tmp_path = format!("/tmp/{}_stream", id);
+    app.export_file(&id, &tmp_path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+
+    // 2. Open a temporary file
+    let file = tokio::fs::File::open(&tmp_path).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+
+    // 3. Stream
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    // 4. MIME
+    let mime = storage::guess_mime(&metadata.filename).to_string();
+
+    // 5. Delete the temporary file (without blocking the stream)
+    tokio::spawn(async move {
+        let _ = tokio::fs::remove_file(tmp_path).await;
+    });
+
+    Ok((StatusCode::OK, [(header::CONTENT_TYPE, mime)], body))
 }
