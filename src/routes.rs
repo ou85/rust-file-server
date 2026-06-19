@@ -376,16 +376,16 @@ fn require_user(jar: &CookieJar) -> Result<(), (StatusCode, Json<serde_json::Val
 }
 
 async fn stream_file(
-    _jar: CookieJar,
+    jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    if let Err(e) = require_auth(&jar) {
+            return Err(e);
+        }
+        
     // --------------------------------------------------------------
-    // if let Err(e) = require_auth(&jar) {
-    //     return Err(e);
-    // }
-
     // let metadata = match app.get_file(&id) {
     //     Ok(Some(m)) => m,
     //     _ => {
