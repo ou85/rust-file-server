@@ -96,18 +96,22 @@ impl Storage {
 
     /// Reads an encrypted file from storage, decrypts it,
     /// and writes the original content to the destination path.        
-    pub fn export_file(&self, id: &str, destination: &str, crypto: &Crypto) -> io::Result<()> {
-        let content = self.read_file(id, crypto)?;
+    // pub fn export_file(&self, id: &str, destination: &str, crypto: &Crypto) -> io::Result<()> {
+    //     let content = self.read_file(id, crypto)?;
 
-        fs::write(destination, content)?;
+    //     fs::write(destination, content)?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     pub fn delete_file(&self, id: &str) -> io::Result<()> {
         let path = format!("{}/{}", self.root_path, id);
         fs::remove_file(path)?;
         Ok(())
+    }
+
+    pub fn export_to_bytes(&self, id: &str, crypto: &Crypto) -> io::Result<Vec<u8>> {
+        self.read_file(id, crypto)
     }
 }
 

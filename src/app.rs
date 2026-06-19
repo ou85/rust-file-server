@@ -71,15 +71,15 @@ impl App {
         Ok(files)
     }
 
-    pub fn export_file(
-        &self,
-        id: &str,
-        destination: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.storage.export_file(id, destination, &self.crypto)?;
+    // pub fn export_file(
+    //     &self,
+    //     id: &str,
+    //     destination: &str,
+    // ) -> Result<(), Box<dyn std::error::Error>> {
+    //     self.storage.export_file(id, destination, &self.crypto)?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     pub fn delete_file(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.storage.delete_file(id)?;
@@ -122,5 +122,9 @@ impl App {
         self.metadata.save_file(&metadata)?;
 
         Ok(metadata)
+    }
+
+    pub fn export_to_bytes(&self, id: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        Ok(self.storage.export_to_bytes(id, &self.crypto)?)
     }
 }
