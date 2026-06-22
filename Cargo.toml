@@ -9,8 +9,10 @@ aes-gcm = "0.10"
 axum = { version = "0.8.9", features = ["multipart"] }
 axum-extra = { version = "0.10", features = ["cookie"] }
 bcrypt = "0.17"
+bytes = "1"
 chrono = "0.4"
 dotenvy = "0.15.7"
+futures = "0.3"
 mime_guess = "2"
 rand = "0.9"
 redb = "3"

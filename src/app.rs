@@ -1,6 +1,7 @@
 use crate::{config::Config, crypto::Crypto, database::MetadataStore, storage::Storage};
 
 use crate::models::FileMetadata;
+use crate::storage::ChunkIterator;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct App {
@@ -71,16 +72,6 @@ impl App {
         Ok(files)
     }
 
-    // pub fn export_file(
-    //     &self,
-    //     id: &str,
-    //     destination: &str,
-    // ) -> Result<(), Box<dyn std::error::Error>> {
-    //     self.storage.export_file(id, destination, &self.crypto)?;
-
-    //     Ok(())
-    // }
-
     pub fn delete_file(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.storage.delete_file(id)?;
         self.metadata.delete_file(id)?;
@@ -124,7 +115,13 @@ impl App {
         Ok(metadata)
     }
 
+    /// For preview (open_file) - small files, everything in memory
     pub fn export_to_bytes(&self, id: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         Ok(self.storage.export_to_bytes(id, &self.crypto)?)
+    }
+
+    /// For download/stream - returns an iterator over chunks
+    pub fn export_chunked(&self, id: &str) -> Result<ChunkIterator, Box<dyn std::error::Error>> {
+        Ok(self.storage.stream_chunks(id, &self.crypto)?)
     }
 }

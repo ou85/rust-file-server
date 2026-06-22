@@ -10,11 +10,10 @@ use axum::{
     routing::{delete, get, post},
 };
 use axum_extra::extract::CookieJar;
+use bytes::Bytes;
 use std::sync::Arc;
 
 use axum::body::Body;
-// use tokio_util::io::ReaderStream;
-// use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 pub fn create_router(state: Arc<App>) -> Router {
     Router::new()
@@ -157,10 +156,11 @@ async fn download_file(
     jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
-) -> Result<(StatusCode, [(String, String); 2], Vec<u8>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, [(String, String); 2], Body), (StatusCode, Json<serde_json::Value>)> {
     if let Err(e) = require_user(&jar) {
         return Err(e);
     }
+
     let metadata = match app.get_file(&id) {
         Ok(Some(m)) => m,
         _ => {
@@ -171,33 +171,21 @@ async fn download_file(
         }
     };
 
-    // let tmp_path = format!("/tmp/{}_download", id);
-    // app.export_file(&id, &tmp_path).map_err(|e| {
-    //     (
-    //         StatusCode::INTERNAL_SERVER_ERROR,
-    //         Json(serde_json::json!({ "error": e.to_string(), "id": id })),
-    //     )
-    // })?;
-
-    // let bytes = std::fs::read(&tmp_path).map_err(|e| {
-    //     (
-    //         StatusCode::INTERNAL_SERVER_ERROR,
-    //         Json(serde_json::json!({ "error": e.to_string(), "id": id })),
-    //     )
-    // })?;
-
-    // let _ = std::fs::remove_file(&tmp_path);
-    //-----------------------------------------------------------------------
-    // Change to bytes
-    let bytes = app.export_to_bytes(&id).map_err(|e| {
+    let chunks = app.export_chunked(&id).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string(), "id": id })),
         )
     })?;
-    //-----------------------------------------------------------------------
 
-    let mime = storage::guess_mime(&metadata.filename).to_string();
+    // Get streams from chunks
+    let stream = futures::stream::iter(chunks.map(|chunk| {
+        chunk
+            .map(|bytes| Bytes::from(bytes))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }));
+
+    let mime = storage::guess_mime(&metadata.filename);
 
     Ok((
         StatusCode::OK,
@@ -208,7 +196,7 @@ async fn download_file(
                 format!("attachment; filename=\"{}\"", metadata.filename),
             ),
         ],
-        bytes,
+        Body::from_stream(stream),
     ))
 }
 
@@ -249,38 +237,6 @@ async fn open_file(
         ));
     }
 
-    // // temporary path
-    // let tmp_path = format!("/tmp/{}_open", id);
-
-    // // export the file
-    // if let Err(err) = app.export_file(&id, &tmp_path) {
-    //     return Err((
-    //         StatusCode::INTERNAL_SERVER_ERROR,
-    //         Json(serde_json::json!({
-    //             "error": err.to_string(),
-    //             "id": id
-    //         })),
-    //     ));
-    // }
-
-    // // read the file
-    // let bytes = match std::fs::read(&tmp_path) {
-    //     Ok(b) => b,
-    //     Err(err) => {
-    //         return Err((
-    //             StatusCode::INTERNAL_SERVER_ERROR,
-    //             Json(serde_json::json!({
-    //                 "error": err.to_string(),
-    //                 "id": id
-    //             })),
-    //         ));
-    //     }
-    // };
-
-    // // delete the temporary file
-    // let _ = std::fs::remove_file(&tmp_path);
-    //
-    //--------------------------------------------------------------
     // Change to bytes
     let bytes = app.export_to_bytes(&id).map_err(|err| {
         (
@@ -291,7 +247,6 @@ async fn open_file(
             })),
         )
     })?;
-    //--------------------------------------------------------------
 
     // determine MIME by the ORIGINAL file name
     let mime = storage::guess_mime(&metadata.filename).to_string();
@@ -382,146 +337,8 @@ async fn stream_file(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     if let Err(e) = require_auth(&jar) {
-            return Err(e);
-        }
-        
-    // --------------------------------------------------------------
-    // let metadata = match app.get_file(&id) {
-    //     Ok(Some(m)) => m,
-    //     _ => {
-    //         return Err((
-    //             StatusCode::NOT_FOUND,
-    //             Json(serde_json::json!({
-    //                 "error": "File not found",
-    //                 "id": id
-    //             })),
-    //         ));
-    //     }
-    // };
-
-    // let tmp_path = format!("/tmp/{}_stream", id);
-
-    // app.export_file(&id, &tmp_path).map_err(|e| {
-    //     (
-    //         StatusCode::INTERNAL_SERVER_ERROR,
-    //         Json(serde_json::json!({
-    //             "error": e.to_string()
-    //         })),
-    //     )
-    // })?;
-
-    // let mut file = tokio::fs::File::open(&tmp_path).await.map_err(|e| {
-    //     (
-    //         StatusCode::INTERNAL_SERVER_ERROR,
-    //         Json(serde_json::json!({
-    //             "error": e.to_string()
-    //         })),
-    //     )
-    // })?;
-
-    // let file_size = file
-    //     .metadata()
-    //     .await
-    //     .map_err(|e| {
-    //         (
-    //             StatusCode::INTERNAL_SERVER_ERROR,
-    //             Json(serde_json::json!({
-    //                 "error": e.to_string()
-    //             })),
-    //         )
-    //     })?
-    //     .len();
-
-    // let mime = storage::guess_mime(&metadata.filename);
-
-    // if let Some(range_header) = headers.get(header::RANGE) {
-    //     if let Ok(range_str) = range_header.to_str() {
-    //         if let Some(range) = range_str.strip_prefix("bytes=") {
-    //             let parts: Vec<&str> = range.split('-').collect();
-
-    //             let start: u64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-
-    //             let end: u64 = parts
-    //                 .get(1)
-    //                 .and_then(|s| s.parse().ok())
-    //                 .unwrap_or(file_size - 1);
-
-    //             let end = end.min(file_size - 1);
-
-    //             let length = end - start + 1;
-
-    //             file.seek(std::io::SeekFrom::Start(start))
-    //                 .await
-    //                 .map_err(|e| {
-    //                     (
-    //                         StatusCode::INTERNAL_SERVER_ERROR,
-    //                         Json(serde_json::json!({
-    //                             "error": e.to_string()
-    //                         })),
-    //                     )
-    //                 })?;
-
-    //             let mut buffer = vec![0u8; length as usize];
-
-    //             file.read_exact(&mut buffer).await.map_err(|e| {
-    //                 (
-    //                     StatusCode::INTERNAL_SERVER_ERROR,
-    //                     Json(serde_json::json!({
-    //                         "error": e.to_string()
-    //                     })),
-    //                 )
-    //             })?;
-
-    //             let _ = tokio::fs::remove_file(&tmp_path).await;
-
-    //             let mut partial_headers = HeaderMap::new();
-
-    //             partial_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
-
-    //             partial_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
-
-    //             partial_headers.insert(
-    //                 header::CONTENT_RANGE,
-    //                 format!("bytes {}-{}/{}", start, end, file_size)
-    //                     .parse()
-    //                     .unwrap(),
-    //             );
-
-    //             partial_headers.insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
-
-    //             return Ok((
-    //                 StatusCode::PARTIAL_CONTENT,
-    //                 partial_headers,
-    //                 Body::from(buffer),
-    //             ));
-    //         }
-    //     }
-    // }
-
-    // let bytes = tokio::fs::read(&tmp_path).await.map_err(|e| {
-    //     (
-    //         StatusCode::INTERNAL_SERVER_ERROR,
-    //         Json(serde_json::json!({
-    //             "error": e.to_string()
-    //         })),
-    //     )
-    // })?;
-
-    // let _ = tokio::fs::remove_file(&tmp_path).await;
-
-    // let mut headers = HeaderMap::new();
-
-    // headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
-
-    // headers.insert(
-    //     header::CONTENT_LENGTH,
-    //     bytes.len().to_string().parse().unwrap(),
-    // );
-
-    // Ok((StatusCode::OK, headers, Body::from(bytes)))
-    // --------------------------------------------------------------
-    //
-    // Refactor to bytes
+        return Err(e);
+    }
     let metadata = match app.get_file(&id) {
         Ok(Some(m)) => m,
         _ => {
