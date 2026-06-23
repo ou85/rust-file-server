@@ -484,7 +484,7 @@ async fn stream_file(
         }
     }
 
-    // Полный файл без Range
+    // Full file without Range
     let chunks = app.export_chunked(&id).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
