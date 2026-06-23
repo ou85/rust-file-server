@@ -1,5 +1,9 @@
 use crate::{
-    config::Config, crypto::Crypto, database::MetadataStore, models::FileMetadata, storage::Storage, storage::ChunkIterator,
+    config::Config,
+    crypto::Crypto,
+    database::MetadataStore,
+    models::FileMetadata,
+    storage::{ChunkIterator, RangeChunkIterator, Storage},
 };
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -91,29 +95,29 @@ impl App {
         Ok(())
     }
 
-    pub fn import_bytes(
-        &self,
-        filename: &str,
-        content: Vec<u8>,
-    ) -> Result<FileMetadata, Box<dyn std::error::Error>> {
-        let file = crate::models::StoredFile {
-            id: crate::id::id_16(),
-            filename: filename.to_string(),
-            content,
-        };
+    // pub fn import_bytes(
+    //     &self,
+    //     filename: &str,
+    //     content: Vec<u8>,
+    // ) -> Result<FileMetadata, Box<dyn std::error::Error>> {
+    //     let file = crate::models::StoredFile {
+    //         id: crate::id::id_16(),
+    //         filename: filename.to_string(),
+    //         content,
+    //     };
 
-        let metadata = FileMetadata {
-            id: file.id.clone(),
-            filename: file.filename.clone(),
-            size: file.content.len() as u64,
-            created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-        };
+    //     let metadata = FileMetadata {
+    //         id: file.id.clone(),
+    //         filename: file.filename.clone(),
+    //         size: file.content.len() as u64,
+    //         created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+    //     };
 
-        self.storage.save_file(&file, &self.crypto)?;
-        self.metadata.save_file(&metadata)?;
+    //     self.storage.save_file(&file, &self.crypto)?;
+    //     self.metadata.save_file(&metadata)?;
 
-        Ok(metadata)
-    }
+    //     Ok(metadata)
+    // }
 
     /// For preview (open_file) - small files, everything in memory
     pub fn export_to_bytes(&self, id: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -123,5 +127,16 @@ impl App {
     /// For download/stream - returns an iterator over chunks
     pub fn export_chunked(&self, id: &str) -> Result<ChunkIterator, Box<dyn std::error::Error>> {
         Ok(self.storage.stream_chunks(id, &self.crypto)?)
+    }
+
+    pub fn export_range(
+        &self,
+        id: &str,
+        byte_start: u64,
+        byte_end: u64,
+    ) -> Result<RangeChunkIterator, Box<dyn std::error::Error>> {
+        Ok(self
+            .storage
+            .stream_chunks_range(id, &self.crypto, byte_start, byte_end)?)
     }
 }
