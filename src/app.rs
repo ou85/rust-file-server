@@ -1,6 +1,7 @@
-use crate::{config::Config, crypto::Crypto, database::MetadataStore, storage::Storage};
+use crate::{
+    config::Config, crypto::Crypto, database::MetadataStore, models::FileMetadata, storage::Storage,
+};
 
-use crate::models::FileMetadata;
 use crate::storage::ChunkIterator;
 use std::time::{SystemTime, UNIX_EPOCH};
 

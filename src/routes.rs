@@ -56,7 +56,6 @@ async fn login_page() -> Html<&'static str> {
 }
 
 async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> impl IntoResponse {
-    // println!("=== Login attempt: {}", req.username);
     match authenticate(&req.username, &req.password, &app.config) {
         Some(role) => {
             println!("=== Login success");

@@ -1,7 +1,4 @@
-use crate::{
-    crypto::Crypto,
-    models::StoredFile,
-};
+use crate::{crypto::Crypto, models::StoredFile};
 use std::{fs, io, path::Path};
 
 pub struct Storage {
@@ -42,7 +39,7 @@ impl Storage {
             data,
             offset: 4,
             chunk_size,
-            crypto: crypto.clone(), 
+            crypto: crypto.clone(),
         })
     }
 
@@ -78,8 +75,8 @@ impl Storage {
 /// Iterator over decrypted chunks.
 /// Stores data of one chunk at a time in RAM
 pub struct ChunkIterator {
-    data: Vec<u8>,     
-    offset: usize,    
+    data: Vec<u8>,
+    offset: usize,
     chunk_size: usize,
     crypto: Crypto,
 }
