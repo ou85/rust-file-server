@@ -1,8 +1,11 @@
 use crate::{
-    config::Config, crypto::Crypto, database::MetadataStore, models::FileMetadata, storage::Storage,
+    config::Config,
+    crypto::Crypto,
+    database::MetadataStore,
+    models::FileMetadata,
+    storage::{ChunkIterator, RangeChunkIterator, Storage},
 };
 
-use crate::storage::ChunkIterator;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct App {
@@ -124,5 +127,16 @@ impl App {
     /// For download/stream - returns an iterator over chunks
     pub fn export_chunked(&self, id: &str) -> Result<ChunkIterator, Box<dyn std::error::Error>> {
         Ok(self.storage.stream_chunks(id, &self.crypto)?)
+    }
+
+    pub fn export_range(
+        &self,
+        id: &str,
+        byte_start: u64,
+        byte_end: u64,
+    ) -> Result<RangeChunkIterator, Box<dyn std::error::Error>> {
+        Ok(self
+            .storage
+            .stream_chunks_range(id, &self.crypto, byte_start, byte_end)?)
     }
 }

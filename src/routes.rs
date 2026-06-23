@@ -329,6 +329,82 @@ fn require_user(jar: &CookieJar) -> Result<(), (StatusCode, Json<serde_json::Val
     }
 }
 
+// async fn stream_file(
+//     jar: CookieJar,
+//     Path(id): Path<String>,
+//     State(app): State<Arc<App>>,
+//     headers: HeaderMap,
+// ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+//     if let Err(e) = require_auth(&jar) {
+//         return Err(e);
+//     }
+//     let metadata = match app.get_file(&id) {
+//         Ok(Some(m)) => m,
+//         _ => {
+//             return Err((
+//                 StatusCode::NOT_FOUND,
+//                 Json(serde_json::json!({
+//                     "error": "File not found",
+//                     "id": id
+//                 })),
+//             ));
+//         }
+//     };
+
+//     let bytes = app.export_to_bytes(&id).map_err(|e| {
+//         (
+//             StatusCode::INTERNAL_SERVER_ERROR,
+//             Json(serde_json::json!({ "error": e.to_string() })),
+//         )
+//     })?;
+
+//     let file_size = bytes.len() as u64;
+//     let mime = storage::guess_mime(&metadata.filename);
+
+//     if let Some(range_header) = headers.get(header::RANGE) {
+//         if let Ok(range_str) = range_header.to_str() {
+//             if let Some(range) = range_str.strip_prefix("bytes=") {
+//                 let parts: Vec<&str> = range.split('-').collect();
+//                 let start: u64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+//                 let end: u64 = parts
+//                     .get(1)
+//                     .and_then(|s| s.parse().ok())
+//                     .unwrap_or(file_size - 1)
+//                     .min(file_size - 1);
+
+//                 let chunk = bytes[start as usize..=end as usize].to_vec();
+//                 let length = chunk.len();
+
+//                 let mut partial_headers = HeaderMap::new();
+//                 partial_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
+//                 partial_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+//                 partial_headers.insert(
+//                     header::CONTENT_RANGE,
+//                     format!("bytes {}-{}/{}", start, end, file_size)
+//                         .parse()
+//                         .unwrap(),
+//                 );
+//                 partial_headers.insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
+
+//                 return Ok((
+//                     StatusCode::PARTIAL_CONTENT,
+//                     partial_headers,
+//                     Body::from(chunk),
+//                 ));
+//             }
+//         }
+//     }
+
+//     // Full file
+//     let mut resp_headers = HeaderMap::new();
+//     resp_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
+//     resp_headers.insert(
+//         header::CONTENT_LENGTH,
+//         file_size.to_string().parse().unwrap(),
+//     );
+
+//     Ok((StatusCode::OK, resp_headers, Body::from(bytes)))
+// }
 async fn stream_file(
     jar: CookieJar,
     Path(id): Path<String>,
@@ -338,27 +414,18 @@ async fn stream_file(
     if let Err(e) = require_auth(&jar) {
         return Err(e);
     }
+
     let metadata = match app.get_file(&id) {
         Ok(Some(m)) => m,
         _ => {
             return Err((
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error": "File not found",
-                    "id": id
-                })),
+                Json(serde_json::json!({ "error": "File not found", "id": id })),
             ));
         }
     };
 
-    let bytes = app.export_to_bytes(&id).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-    })?;
-
-    let file_size = bytes.len() as u64;
+    let file_size = metadata.size;
     let mime = storage::guess_mime(&metadata.filename);
 
     if let Some(range_header) = headers.get(header::RANGE) {
@@ -372,36 +439,71 @@ async fn stream_file(
                     .unwrap_or(file_size - 1)
                     .min(file_size - 1);
 
-                let chunk = bytes[start as usize..=end as usize].to_vec();
-                let length = chunk.len();
+                if start > end || start >= file_size {
+                    return Err((
+                        StatusCode::RANGE_NOT_SATISFIABLE,
+                        Json(serde_json::json!({
+                            "error": "Invalid range",
+                            "file_size": file_size
+                        })),
+                    ));
+                }
 
-                let mut partial_headers = HeaderMap::new();
-                partial_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
-                partial_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
-                partial_headers.insert(
+                let length = end - start + 1;
+
+                let chunks = app.export_range(&id, start, end).map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": e.to_string() })),
+                    )
+                })?;
+
+                let stream = futures::stream::iter(
+                    chunks
+                        .map(|c| c.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))),
+                );
+
+                let mut resp_headers = HeaderMap::new();
+                resp_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
+                resp_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+                resp_headers.insert(
                     header::CONTENT_RANGE,
                     format!("bytes {}-{}/{}", start, end, file_size)
                         .parse()
                         .unwrap(),
                 );
-                partial_headers.insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
+                resp_headers.insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
 
                 return Ok((
                     StatusCode::PARTIAL_CONTENT,
-                    partial_headers,
-                    Body::from(chunk),
-                ));
+                    resp_headers,
+                    Body::from_stream(stream),
+                )
+                    .into_response());
             }
         }
     }
 
-    // Full file
+    // Полный файл без Range
+    let chunks = app.export_chunked(&id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+
+    let stream = futures::stream::iter(chunks.map(|c| {
+        c.map(Bytes::from)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }));
+
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
+    resp_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
     resp_headers.insert(
         header::CONTENT_LENGTH,
         file_size.to_string().parse().unwrap(),
     );
 
-    Ok((StatusCode::OK, resp_headers, Body::from(bytes)))
+    Ok((StatusCode::OK, resp_headers, Body::from_stream(stream)).into_response())
 }
