@@ -150,7 +150,7 @@ impl Storage {
         let skip_bytes = byte_start as usize % chunk_size;
         let remaining = (byte_end - byte_start + 1) as usize;
 
-        // Перематываем сразу к нужному чанку, пропуская предыдущие
+        // Fast-forward directly to the required chunk, skipping the previous ones
         let offset = 4 + first_chunk * frame_size;
 
         Ok(RangeChunkIterator {
@@ -163,6 +163,11 @@ impl Storage {
             skip_bytes,
             remaining,
         })
+    }
+
+    pub fn create_file_writer(&self, id: &str) -> io::Result<std::fs::File> {
+        let path = self.file_path(id);
+        Ok(std::fs::File::create(path)?)
     }
 }
 

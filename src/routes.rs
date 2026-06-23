@@ -261,38 +261,111 @@ async fn upload_files(
     if let Err((code, json)) = require_auth(&jar) {
         return Err((code, json.to_string()));
     }
+
     let mut uploaded = Vec::new();
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Multipart error: {}", e)))?
     {
+        use crate::crypto::CHUNK_SIZE;
+        use std::io::Write;
+
         let filename = field.file_name().unwrap_or("unknown").to_string();
+        let id = crate::id::id_16();
 
-        let data = field
-            .bytes()
-            .await
-            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Read error: {}", e)))?;
-
-        let metadata = app.import_bytes(&filename, data.to_vec()).map_err(|e| {
+        let mut file = app.storage.create_file_writer(&id).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Import error: {}", e),
+                format!("IO error: {}", e),
+            )
+        })?;
+
+        // Format header: [4 bytes chunk_size]
+        let chunk_size_header = (CHUNK_SIZE as u32).to_le_bytes();
+        file.write_all(&chunk_size_header).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("IO error: {}", e),
+            )
+        })?;
+
+        let mut buffer = Vec::with_capacity(CHUNK_SIZE);
+        let mut total_bytes: u64 = 0;
+
+        // Read from multipart in chunks
+        while let Some(bytes) = field
+            .chunk()
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Read error: {}", e)))?
+        {
+            buffer.extend_from_slice(&bytes);
+            total_bytes += bytes.len() as u64;
+
+            // Accumulated a full chunk — encrypt and write
+            while buffer.len() >= CHUNK_SIZE {
+                let chunk = buffer[..CHUNK_SIZE].to_vec();
+                buffer.drain(..CHUNK_SIZE);
+
+                app.crypto
+                    .encrypt_chunked_to_writer(std::iter::once(Ok(chunk)), &mut file)
+                    .map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Encrypt error: {}", e),
+                        )
+                    })?;
+            }
+        }
+
+        // Last incomplete chunk
+        if !buffer.is_empty() {
+            app.crypto
+                .encrypt_chunked_to_writer(std::iter::once(Ok(buffer)), &mut file)
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Encrypt error: {}", e),
+                    )
+                })?;
+        }
+
+        file.flush().map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("IO error: {}", e),
+            )
+        })?;
+
+        // Save metadata
+        let metadata = crate::models::FileMetadata {
+            id: id.clone(),
+            filename: filename.clone(),
+            size: total_bytes,
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+
+        app.metadata.save_file(&metadata).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB error: {}", e),
             )
         })?;
 
         println!(
             "=== Uploaded: {} ({:.2} MB)",
-            metadata.filename,
-            metadata.size as f64 / 1024.0 / 1024.0
+            filename,
+            total_bytes as f64 / 1024.0 / 1024.0
         );
 
         uploaded.push(metadata);
     }
 
     if uploaded.is_empty() {
-        println!("Error: No files uploaded (StatusCode::BAD_REQUEST)");
         return Err((StatusCode::BAD_REQUEST, "No files uploaded".into()));
     }
 
@@ -329,82 +402,6 @@ fn require_user(jar: &CookieJar) -> Result<(), (StatusCode, Json<serde_json::Val
     }
 }
 
-// async fn stream_file(
-//     jar: CookieJar,
-//     Path(id): Path<String>,
-//     State(app): State<Arc<App>>,
-//     headers: HeaderMap,
-// ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-//     if let Err(e) = require_auth(&jar) {
-//         return Err(e);
-//     }
-//     let metadata = match app.get_file(&id) {
-//         Ok(Some(m)) => m,
-//         _ => {
-//             return Err((
-//                 StatusCode::NOT_FOUND,
-//                 Json(serde_json::json!({
-//                     "error": "File not found",
-//                     "id": id
-//                 })),
-//             ));
-//         }
-//     };
-
-//     let bytes = app.export_to_bytes(&id).map_err(|e| {
-//         (
-//             StatusCode::INTERNAL_SERVER_ERROR,
-//             Json(serde_json::json!({ "error": e.to_string() })),
-//         )
-//     })?;
-
-//     let file_size = bytes.len() as u64;
-//     let mime = storage::guess_mime(&metadata.filename);
-
-//     if let Some(range_header) = headers.get(header::RANGE) {
-//         if let Ok(range_str) = range_header.to_str() {
-//             if let Some(range) = range_str.strip_prefix("bytes=") {
-//                 let parts: Vec<&str> = range.split('-').collect();
-//                 let start: u64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-//                 let end: u64 = parts
-//                     .get(1)
-//                     .and_then(|s| s.parse().ok())
-//                     .unwrap_or(file_size - 1)
-//                     .min(file_size - 1);
-
-//                 let chunk = bytes[start as usize..=end as usize].to_vec();
-//                 let length = chunk.len();
-
-//                 let mut partial_headers = HeaderMap::new();
-//                 partial_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
-//                 partial_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
-//                 partial_headers.insert(
-//                     header::CONTENT_RANGE,
-//                     format!("bytes {}-{}/{}", start, end, file_size)
-//                         .parse()
-//                         .unwrap(),
-//                 );
-//                 partial_headers.insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
-
-//                 return Ok((
-//                     StatusCode::PARTIAL_CONTENT,
-//                     partial_headers,
-//                     Body::from(chunk),
-//                 ));
-//             }
-//         }
-//     }
-
-//     // Full file
-//     let mut resp_headers = HeaderMap::new();
-//     resp_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
-//     resp_headers.insert(
-//         header::CONTENT_LENGTH,
-//         file_size.to_string().parse().unwrap(),
-//     );
-
-//     Ok((StatusCode::OK, resp_headers, Body::from(bytes)))
-// }
 async fn stream_file(
     jar: CookieJar,
     Path(id): Path<String>,
