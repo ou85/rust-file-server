@@ -203,27 +203,30 @@ async fn open_file(
     jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
-) -> Result<(StatusCode, [(String, String); 1], Vec<u8>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     if let Err(e) = require_user(&jar) {
         return Err(e);
     }
-    // get metadata to find out the file name.
+
     let metadata = match app.get_file(&id) {
         Ok(Some(m)) => m,
         _ => {
             return Err((
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error": "File not found",
-                    "id": id
-                })),
+                Json(serde_json::json!({ "error": "File not found", "id": id })),
             ));
         }
     };
 
-    // limit size for open file to 200MB
-    let max_preview_size = app.config.max_preview_size_bytes;
+    let mime = storage::guess_mime(&metadata.filename);
 
+    // Video and audio — redirect to stream
+    if mime.starts_with("video/") || mime.starts_with("audio/") {
+        return Ok(Redirect::to(&format!("/files/{}/stream", id)).into_response());
+    }
+
+    // The rest is the size limit; then we output the bytes.
+    let max_preview_size = app.config.max_preview_size_bytes;
     if metadata.size > max_preview_size {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -236,21 +239,14 @@ async fn open_file(
         ));
     }
 
-    // Change to bytes
     let bytes = app.export_to_bytes(&id).map_err(|err| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": err.to_string(),
-                "id": id
-            })),
+            Json(serde_json::json!({ "error": err.to_string(), "id": id })),
         )
     })?;
 
-    // determine MIME by the ORIGINAL file name
-    let mime = storage::guess_mime(&metadata.filename).to_string();
-
-    Ok((StatusCode::OK, [("Content-Type".to_string(), mime)], bytes))
+    Ok((StatusCode::OK, [("Content-Type".to_string(), mime)], bytes).into_response())
 }
 
 async fn upload_files(

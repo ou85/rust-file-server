@@ -116,13 +116,8 @@
             </tr>`;
             });
         }
-        // function openFile(id) { window.open('/files/' + id + '/open'); }
-        function openFile(id) {
-            window.open('/files/' + id + '/stream', '_blank');
-        }
-        
+        function openFile(id) { window.open('/files/' + id + '/open', '_blank'); }
         function downloadFile(id) { window.location = '/files/' + id + '/download'; }
-
         async function deleteFile(id) {
             if (!confirm("Delete file?")) {
                 return;
