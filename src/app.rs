@@ -1,8 +1,7 @@
 use crate::{
-    config::Config, crypto::Crypto, database::MetadataStore, models::FileMetadata, storage::Storage,
+    config::Config, crypto::Crypto, database::MetadataStore, models::FileMetadata, storage::Storage, storage::ChunkIterator,
 };
 
-use crate::storage::ChunkIterator;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct App {
