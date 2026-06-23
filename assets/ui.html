@@ -2,17 +2,6 @@
 <html lang="eng">
 <head>
     <meta charset="UTF-8">
-    <!-- <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,
-        <svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22256%22 height=%22256%22 viewBox=%220 0 100 100%22>
-        <rect width=%22100%22 height=%22100%22 rx=%2250%22 fill=%22%23131c4f%22>
-        </rect><path d=%22M49.37 18.55L49.37 18.55Q57.11 18.55 61.92 20.16Q66.74 21.79 68.94 25.70Q71.15 29.62 71.15 36.73L71.15 36.73Q71.15 
-        41.41 70.03 44.69Q68.90 47.98 66.33 49.91Q63.77 51.84 59.45 52.38L59.45 52.38L59.45 52.84Q60.98 53.20 62.64 54.23Q64.31 55.27 
-        65.70 57.16Q67.10 59.05 67.82 62.02L67.82 62.02L73.49 81.45L61.61 81.45L56.48 62.28Q55.49 59.05 53.78 57.74Q52.07 
-        56.44 49.10 56.44L49.10 56.44Q43.25 56.44 39.11 56.39Q34.97 56.34 32.23 56.25Q29.48 56.16 27.41 56.16L27.41 56.16L27.68 47.62L49.10 
-        47.62Q53.15 47.52 55.49 46.67Q57.83 45.81 58.82 43.61Q59.81 41.41 59.81 37.35L59.81 37.35Q59.81 33.40 58.82 31.23Q57.83 29.08 55.49 
-        28.22Q53.15 27.37 49.10 27.37L49.10 27.37Q41.18 27.37 35.51 27.45Q29.84 27.55 27.77 27.63L27.77 27.63L26.51 19.36Q30.11 18.99 33.30 
-        18.81Q36.50 18.63 40.28 18.59Q44.06 18.55 49.37 18.55ZM26.51 19.36L37.58 19.36L37.58 81.45L26.51 81.45L26.51 19.36Z%22 fill=%22%23ffc668%22>
-        </path></svg>"/> -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
     <title>RSFS</title>
     <style>
@@ -127,9 +116,8 @@
             </tr>`;
             });
         }
-        function openFile(id) { window.open('/files/' + id + '/open'); }
+        function openFile(id) { window.open('/files/' + id + '/open', '_blank'); }
         function downloadFile(id) { window.location = '/files/' + id + '/download'; }
-
         async function deleteFile(id) {
             if (!confirm("Delete file?")) {
                 return;

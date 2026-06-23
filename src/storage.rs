@@ -1,7 +1,63 @@
 use crate::{crypto::Crypto, models::StoredFile};
-use std::time::Instant;
 use std::{fs, io, path::Path};
 
+/// Iterator over decrypted chunks for a byte range.
+/// Skips chunks before the range, decrypts only what's needed.
+pub struct RangeChunkIterator {
+    data: Vec<u8>,
+    offset: usize,
+    frame_size: usize,
+    crypto: Crypto,
+    current_chunk: usize,
+    last_chunk: usize,
+    skip_bytes: usize,
+    remaining: usize,
+}
+
+impl Iterator for RangeChunkIterator {
+    type Item = io::Result<Vec<u8>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_chunk > self.last_chunk || self.remaining == 0 {
+            return None;
+        }
+
+        let end = (self.offset + self.frame_size).min(self.data.len());
+        let frame = &self.data[self.offset..end];
+
+        if frame.len() < 12 {
+            return Some(Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "corrupt chunk",
+            )));
+        }
+
+        let nonce_bytes: [u8; 12] = frame[..12].try_into().unwrap();
+        let ciphertext = &frame[12..];
+
+        let plain = match self.crypto.decrypt(&nonce_bytes, ciphertext) {
+            Ok(p) => p,
+            Err(_) => {
+                return Some(Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "decryption failed",
+                )));
+            }
+        };
+
+        self.offset += frame.len();
+        self.current_chunk += 1;
+
+        let start = self.skip_bytes;
+        self.skip_bytes = 0;
+
+        let available = &plain[start..];
+        let take = available.len().min(self.remaining);
+        self.remaining -= take;
+
+        Some(Ok(available[..take].to_vec()))
+    }
+}
 pub struct Storage {
     root_path: String,
 }
@@ -9,84 +65,62 @@ pub struct Storage {
 impl Storage {
     pub fn new(root_path: String) -> io::Result<Self> {
         fs::create_dir_all(&root_path)?;
-
-        // println!("=== Storage initialized: {}", root_path);
         println!("=== Storage initialized");
-
         Ok(Self { root_path })
     }
 
-    // File format:
-    //
-    // [12-byte nonce]
-    // [ciphertext + 16-byte GCM tag]
-    //
-    // No debugger ----------------------------------------
-    // pub fn save_file(&self, file: &StoredFile, crypto: &Crypto) -> io::Result<String> {
-    //     let path = format!("{}/{}", self.root_path, file.id);
+    fn file_path(&self, id: &str) -> String {
+        format!("{}/{}", self.root_path, id)
+    }
 
-    //     let (nonce, encrypted) = crypto.encrypt(&file.content);
-
-    //     let mut output = Vec::new();
-
-    //     output.extend_from_slice(&nonce);
-    //     output.extend_from_slice(&encrypted);
-
-    //     fs::write(path, output)?;
-
-    //     Ok(file.id.clone())
-    // }
-    // ------------------------------------
-    //
-    // With debugger ------------------------------------
+    /// Saves the file in chunks - each chunk is encrypted separately
     pub fn save_file(&self, file: &StoredFile, crypto: &Crypto) -> io::Result<String> {
-        let path = format!("{}/{}", self.root_path, file.id);
-
-        let start = Instant::now();
-        let (nonce, encrypted) = crypto.encrypt(&file.content);
-        println!("=== encrypt: {:?}", start.elapsed());
-
-        let start = Instant::now();
-
-        let mut output = Vec::new();
-        output.extend_from_slice(&nonce);
-        output.extend_from_slice(&encrypted);
-
-        println!("=== build output: {:?}", start.elapsed());
-
-        let start = Instant::now();
-        fs::write(path, output)?;
-        println!("=== write file: {:?}", start.elapsed());
-
+        let path = self.file_path(&file.id);
+        let encrypted = crypto.encrypt_chunked(&file.content);
+        fs::write(path, encrypted)?;
         Ok(file.id.clone())
     }
-    // ---------------------------------------------------------
 
-    pub fn read_file(&self, id: &str, crypto: &Crypto) -> io::Result<Vec<u8>> {
-        let path = format!("{}/{}", self.root_path, id);
-
+    /// Reads an encrypted file and returns an iterator over the decrypted chunks (one chunk ~8MB )
+    pub fn stream_chunks(&self, id: &str, crypto: &Crypto) -> io::Result<ChunkIterator> {
+        let path = self.file_path(id);
         let data = fs::read(path)?;
 
-        if data.len() < 12 {
+        if data.len() < 4 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "file too small"));
         }
 
-        let nonce_bytes: [u8; 12] = data[..12].try_into().unwrap();
-        let encrypted = &data[12..];
-        let decrypted = crypto.decrypt(&nonce_bytes, encrypted);
+        let chunk_size = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
 
-        Ok(decrypted)
+        Ok(ChunkIterator {
+            data,
+            offset: 4,
+            chunk_size,
+            crypto: crypto.clone(),
+        })
+    }
+
+    /// For small files (open/preview) - reads everything in Vec<u8>
+    pub fn export_to_bytes(&self, id: &str, crypto: &Crypto) -> io::Result<Vec<u8>> {
+        let mut result = Vec::new();
+        for chunk in self.stream_chunks(id, crypto)? {
+            result.extend_from_slice(&chunk?);
+        }
+        Ok(result)
+    }
+
+    pub fn delete_file(&self, id: &str) -> io::Result<()> {
+        fs::remove_file(self.file_path(id))?;
+        Ok(())
     }
 
     pub fn import_file(path: &str) -> io::Result<StoredFile> {
         let content = fs::read(path)?;
-
         let filename = Path::new(path)
             .file_name()
             .unwrap()
             .to_string_lossy()
             .to_string();
-
         Ok(StoredFile {
             id: crate::id::id_16(),
             filename,
@@ -94,22 +128,97 @@ impl Storage {
         })
     }
 
-    /// Reads an encrypted file from storage, decrypts it,
-    /// and writes the original content to the destination path.        
-    pub fn export_file(&self, id: &str, destination: &str, crypto: &Crypto) -> io::Result<()> {
-        let content = self.read_file(id, crypto)?;
+    pub fn stream_chunks_range(
+        &self,
+        id: &str,
+        crypto: &Crypto,
+        byte_start: u64,
+        byte_end: u64,
+    ) -> io::Result<RangeChunkIterator> {
+        let path = self.file_path(id);
+        let data = fs::read(path)?;
 
-        fs::write(destination, content)?;
+        if data.len() < 4 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "file too small"));
+        }
 
-        Ok(())
+        let chunk_size = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
+        let frame_size = 12 + chunk_size + 16; // nonce + ciphertext + GCM tag
+
+        let first_chunk = byte_start as usize / chunk_size;
+        let last_chunk = byte_end as usize / chunk_size;
+        let skip_bytes = byte_start as usize % chunk_size;
+        let remaining = (byte_end - byte_start + 1) as usize;
+
+        // Fast-forward directly to the required chunk, skipping the previous ones
+        let offset = 4 + first_chunk * frame_size;
+
+        Ok(RangeChunkIterator {
+            data,
+            offset,
+            frame_size,
+            crypto: crypto.clone(),
+            current_chunk: first_chunk,
+            last_chunk,
+            skip_bytes,
+            remaining,
+        })
     }
 
-    pub fn delete_file(&self, id: &str) -> io::Result<()> {
-        let path = format!("{}/{}", self.root_path, id);
-        fs::remove_file(path)?;
-        Ok(())
+    pub fn create_file_writer(&self, id: &str) -> io::Result<std::fs::File> {
+        let path = self.file_path(id);
+        Ok(std::fs::File::create(path)?)
     }
 }
+
+/// Iterator over decrypted chunks.
+/// Stores data of one chunk at a time in RAM
+pub struct ChunkIterator {
+    data: Vec<u8>,
+    offset: usize,
+    chunk_size: usize,
+    crypto: Crypto,
+}
+
+impl<'a> Iterator for ChunkIterator {
+    type Item = io::Result<Vec<u8>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.data.len() {
+            return None;
+        }
+
+        // chunk ciphertext = plaintext + 16 bytes GCM tag
+        let ct_size = self.chunk_size + 16;
+        // nonce (12) + ciphertext
+        let frame_size = 12 + ct_size;
+        let end = (self.offset + frame_size).min(self.data.len());
+        let frame = &self.data[self.offset..end];
+
+        if frame.len() < 12 {
+            return Some(Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "corrupt chunk",
+            )));
+        }
+
+        let nonce_bytes: [u8; 12] = frame[..12].try_into().unwrap();
+        let ciphertext = &frame[12..];
+
+        match self.crypto.decrypt(&nonce_bytes, ciphertext) {
+            Ok(plain) => {
+                self.offset += frame.len();
+                Some(Ok(plain))
+            }
+            Err(_) => Some(Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "decryption failed",
+            ))),
+        }
+    }
+}
+
+// ------------------ Public Methods ------------------
 
 pub fn guess_mime(filename: &str) -> String {
     mime_guess::from_path(filename)

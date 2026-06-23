@@ -2,22 +2,18 @@ use crate::{
     app::App, auth::UserRole, auth::authenticate, models::FileMetadata, models::LoginRequest,
     storage,
 };
-use axum::extract::{DefaultBodyLimit, Multipart, Path, State};
 use axum::{
     Json, Router,
-    http::StatusCode,
-    http::header,
-    response::Html,
-    response::IntoResponse,
-    response::Redirect,
+    extract::{DefaultBodyLimit, Multipart, Path, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{Html, IntoResponse, Redirect},
     routing::{delete, get, post},
 };
 use axum_extra::extract::CookieJar;
+use bytes::Bytes;
 use std::sync::Arc;
 
 use axum::body::Body;
-// use tokio::fs::File;
-use tokio_util::io::ReaderStream;
 
 pub fn create_router(state: Arc<App>) -> Router {
     Router::new()
@@ -60,7 +56,6 @@ async fn login_page() -> Html<&'static str> {
 }
 
 async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> impl IntoResponse {
-    // println!("=== Login attempt: {}", req.username);
     match authenticate(&req.username, &req.password, &app.config) {
         Some(role) => {
             println!("=== Login success");
@@ -160,10 +155,11 @@ async fn download_file(
     jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
-) -> Result<(StatusCode, [(String, String); 2], Vec<u8>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, [(String, String); 2], Body), (StatusCode, Json<serde_json::Value>)> {
     if let Err(e) = require_user(&jar) {
         return Err(e);
     }
+
     let metadata = match app.get_file(&id) {
         Ok(Some(m)) => m,
         _ => {
@@ -174,24 +170,21 @@ async fn download_file(
         }
     };
 
-    let tmp_path = format!("/tmp/{}_download", id);
-    app.export_file(&id, &tmp_path).map_err(|e| {
+    let chunks = app.export_chunked(&id).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string(), "id": id })),
         )
     })?;
 
-    let bytes = std::fs::read(&tmp_path).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string(), "id": id })),
-        )
-    })?;
+    // Get streams from chunks
+    let stream = futures::stream::iter(chunks.map(|chunk| {
+        chunk
+            .map(|bytes| Bytes::from(bytes))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }));
 
-    let _ = std::fs::remove_file(&tmp_path);
-
-    let mime = storage::guess_mime(&metadata.filename).to_string();
+    let mime = storage::guess_mime(&metadata.filename);
 
     Ok((
         StatusCode::OK,
@@ -202,7 +195,7 @@ async fn download_file(
                 format!("attachment; filename=\"{}\"", metadata.filename),
             ),
         ],
-        bytes,
+        Body::from_stream(stream),
     ))
 }
 
@@ -210,27 +203,30 @@ async fn open_file(
     jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
-) -> Result<(StatusCode, [(String, String); 1], Vec<u8>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     if let Err(e) = require_user(&jar) {
         return Err(e);
     }
-    // get metadata to find out the file name.
+
     let metadata = match app.get_file(&id) {
         Ok(Some(m)) => m,
         _ => {
             return Err((
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error": "File not found",
-                    "id": id
-                })),
+                Json(serde_json::json!({ "error": "File not found", "id": id })),
             ));
         }
     };
 
-    // limit size for open file to 200MB
-    let max_preview_size = app.config.max_preview_size_bytes;
+    let mime = storage::guess_mime(&metadata.filename);
 
+    // Video and audio — redirect to stream
+    if mime.starts_with("video/") || mime.starts_with("audio/") {
+        return Ok(Redirect::to(&format!("/files/{}/stream", id)).into_response());
+    }
+
+    // The rest is the size limit; then we output the bytes.
+    let max_preview_size = app.config.max_preview_size_bytes;
     if metadata.size > max_preview_size {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -243,41 +239,14 @@ async fn open_file(
         ));
     }
 
-    // temporary path
-    let tmp_path = format!("/tmp/{}_open", id);
-
-    // export the file
-    if let Err(err) = app.export_file(&id, &tmp_path) {
-        return Err((
+    let bytes = app.export_to_bytes(&id).map_err(|err| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": err.to_string(),
-                "id": id
-            })),
-        ));
-    }
+            Json(serde_json::json!({ "error": err.to_string(), "id": id })),
+        )
+    })?;
 
-    // read the file
-    let bytes = match std::fs::read(&tmp_path) {
-        Ok(b) => b,
-        Err(err) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": err.to_string(),
-                    "id": id
-                })),
-            ));
-        }
-    };
-
-    // delete the temporary file
-    let _ = std::fs::remove_file(&tmp_path);
-
-    // determine MIME by the ORIGINAL file name
-    let mime = storage::guess_mime(&metadata.filename).to_string();
-
-    Ok((StatusCode::OK, [("Content-Type".to_string(), mime)], bytes))
+    Ok((StatusCode::OK, [("Content-Type".to_string(), mime)], bytes).into_response())
 }
 
 async fn upload_files(
@@ -288,38 +257,111 @@ async fn upload_files(
     if let Err((code, json)) = require_auth(&jar) {
         return Err((code, json.to_string()));
     }
+
     let mut uploaded = Vec::new();
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Multipart error: {}", e)))?
     {
+        use crate::crypto::CHUNK_SIZE;
+        use std::io::Write;
+
         let filename = field.file_name().unwrap_or("unknown").to_string();
+        let id = crate::id::id_16();
 
-        let data = field
-            .bytes()
-            .await
-            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Read error: {}", e)))?;
-
-        let metadata = app.import_bytes(&filename, data.to_vec()).map_err(|e| {
+        let mut file = app.storage.create_file_writer(&id).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Import error: {}", e),
+                format!("IO error: {}", e),
+            )
+        })?;
+
+        // Format header: [4 bytes chunk_size]
+        let chunk_size_header = (CHUNK_SIZE as u32).to_le_bytes();
+        file.write_all(&chunk_size_header).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("IO error: {}", e),
+            )
+        })?;
+
+        let mut buffer = Vec::with_capacity(CHUNK_SIZE);
+        let mut total_bytes: u64 = 0;
+
+        // Read from multipart in chunks
+        while let Some(bytes) = field
+            .chunk()
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Read error: {}", e)))?
+        {
+            buffer.extend_from_slice(&bytes);
+            total_bytes += bytes.len() as u64;
+
+            // Accumulated a full chunk — encrypt and write
+            while buffer.len() >= CHUNK_SIZE {
+                let chunk = buffer[..CHUNK_SIZE].to_vec();
+                buffer.drain(..CHUNK_SIZE);
+
+                app.crypto
+                    .encrypt_chunked_to_writer(std::iter::once(Ok(chunk)), &mut file)
+                    .map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Encrypt error: {}", e),
+                        )
+                    })?;
+            }
+        }
+
+        // Last incomplete chunk
+        if !buffer.is_empty() {
+            app.crypto
+                .encrypt_chunked_to_writer(std::iter::once(Ok(buffer)), &mut file)
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Encrypt error: {}", e),
+                    )
+                })?;
+        }
+
+        file.flush().map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("IO error: {}", e),
+            )
+        })?;
+
+        // Save metadata
+        let metadata = crate::models::FileMetadata {
+            id: id.clone(),
+            filename: filename.clone(),
+            size: total_bytes,
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+
+        app.metadata.save_file(&metadata).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB error: {}", e),
             )
         })?;
 
         println!(
             "=== Uploaded: {} ({:.2} MB)",
-            metadata.filename,
-            metadata.size as f64 / 1024.0 / 1024.0
+            filename,
+            total_bytes as f64 / 1024.0 / 1024.0
         );
 
         uploaded.push(metadata);
     }
 
     if uploaded.is_empty() {
-        println!("Error: No files uploaded (StatusCode::BAD_REQUEST)");
         return Err((StatusCode::BAD_REQUEST, "No files uploaded".into()));
     }
 
@@ -360,6 +402,7 @@ async fn stream_file(
     jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     if let Err(e) = require_auth(&jar) {
         return Err(e);
@@ -375,34 +418,85 @@ async fn stream_file(
         }
     };
 
-    // 1. Decrypt into a temporary file
-    let tmp_path = format!("/tmp/{}_stream", id);
-    app.export_file(&id, &tmp_path).map_err(|e| {
+    let file_size = metadata.size;
+    let mime = storage::guess_mime(&metadata.filename);
+
+    if let Some(range_header) = headers.get(header::RANGE) {
+        if let Ok(range_str) = range_header.to_str() {
+            if let Some(range) = range_str.strip_prefix("bytes=") {
+                let parts: Vec<&str> = range.split('-').collect();
+                let start: u64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+                let end: u64 = parts
+                    .get(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(file_size - 1)
+                    .min(file_size - 1);
+
+                if start > end || start >= file_size {
+                    return Err((
+                        StatusCode::RANGE_NOT_SATISFIABLE,
+                        Json(serde_json::json!({
+                            "error": "Invalid range",
+                            "file_size": file_size
+                        })),
+                    ));
+                }
+
+                let length = end - start + 1;
+
+                let chunks = app.export_range(&id, start, end).map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": e.to_string() })),
+                    )
+                })?;
+
+                let stream = futures::stream::iter(
+                    chunks
+                        .map(|c| c.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))),
+                );
+
+                let mut resp_headers = HeaderMap::new();
+                resp_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
+                resp_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+                resp_headers.insert(
+                    header::CONTENT_RANGE,
+                    format!("bytes {}-{}/{}", start, end, file_size)
+                        .parse()
+                        .unwrap(),
+                );
+                resp_headers.insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
+
+                return Ok((
+                    StatusCode::PARTIAL_CONTENT,
+                    resp_headers,
+                    Body::from_stream(stream),
+                )
+                    .into_response());
+            }
+        }
+    }
+
+    // Full file without Range
+    let chunks = app.export_chunked(&id).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
         )
     })?;
 
-    // 2. Open a temporary file
-    let file = tokio::fs::File::open(&tmp_path).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-    })?;
+    let stream = futures::stream::iter(chunks.map(|c| {
+        c.map(Bytes::from)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }));
 
-    // 3. Stream
-    let stream = ReaderStream::new(file);
-    let body = Body::from_stream(stream);
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
+    resp_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+    resp_headers.insert(
+        header::CONTENT_LENGTH,
+        file_size.to_string().parse().unwrap(),
+    );
 
-    // 4. MIME
-    let mime = storage::guess_mime(&metadata.filename).to_string();
-
-    // 5. Delete the temporary file (without blocking the stream)
-    tokio::spawn(async move {
-        let _ = tokio::fs::remove_file(tmp_path).await;
-    });
-
-    Ok((StatusCode::OK, [(header::CONTENT_TYPE, mime)], body))
+    Ok((StatusCode::OK, resp_headers, Body::from_stream(stream)).into_response())
 }
