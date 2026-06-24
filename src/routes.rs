@@ -92,7 +92,12 @@ async fn list_files(
         return Err(e);
     }
 
-    Ok(Json(app.list_files().unwrap()))
+    app.list_files().map(Json).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })
 }
 
 async fn get_file(
@@ -103,7 +108,13 @@ async fn get_file(
     if let Err(e) = require_user(&jar) {
         return Err(e);
     }
-    Ok(Json(app.get_file(&id).unwrap()))
+
+    app.get_file(&id).map(Json).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })
 }
 
 async fn delete_file(

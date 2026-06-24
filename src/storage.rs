@@ -121,8 +121,8 @@ impl Storage {
         let content = fs::read(path)?;
         let filename = Path::new(path)
             .file_name()
-            .unwrap()
-            .to_string_lossy()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
             .to_string();
         Ok(StoredFile {
             id: crate::id::id_16(),
@@ -144,7 +144,7 @@ impl Storage {
         if data.len() < 4 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "file too small"));
         }
-                
+
         let chunk_size =
             data[..4].try_into().map(u32::from_le_bytes).map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidData, "invalid chunk size header")

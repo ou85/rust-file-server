@@ -15,20 +15,23 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    // Console app `cargo run -- demo`
-    let args: Vec<String> = std::env::args().collect();
 
+    let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "demo" {
-        let app = App::new().unwrap();
-        app.demo("real03.txt").unwrap();
+        let app = App::new().expect("Failed to initialize App");
+        app.demo("real03.txt").expect("Demo failed");
         return;
     }
 
-    // HTTP server
-    let state = Arc::new(App::new().unwrap());
+    let state = Arc::new(App::new().expect("Failed to initialize App"));
     let router = create_router(state.clone());
     let addr = config::new_port();
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .expect(&format!("Failed to bind to {}", addr));
+
     app::App::print_banner(&addr, &state.config.storage_path);
-    axum::serve(listener, router).await.unwrap();
+
+    axum::serve(listener, router).await.expect("Server error");
 }
