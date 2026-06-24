@@ -76,7 +76,7 @@ impl Storage {
     /// Saves the file in chunks - each chunk is encrypted separately
     pub fn save_file(&self, file: &StoredFile, crypto: &Crypto) -> io::Result<String> {
         let path = self.file_path(&file.id);
-        let encrypted = crypto.encrypt_chunked(&file.content);
+        let encrypted = crypto.encrypt_chunked(&file.content)?;
         fs::write(path, encrypted)?;
         Ok(file.id.clone())
     }
@@ -90,7 +90,10 @@ impl Storage {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "file too small"));
         }
 
-        let chunk_size = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
+        let chunk_size =
+            data[..4].try_into().map(u32::from_le_bytes).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid chunk size header")
+            })? as usize;
 
         Ok(ChunkIterator {
             data,
@@ -141,8 +144,11 @@ impl Storage {
         if data.len() < 4 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "file too small"));
         }
-
-        let chunk_size = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
+                
+        let chunk_size =
+            data[..4].try_into().map(u32::from_le_bytes).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid chunk size header")
+            })? as usize;
         let frame_size = 12 + chunk_size + 16; // nonce + ciphertext + GCM tag
 
         let first_chunk = byte_start as usize / chunk_size;

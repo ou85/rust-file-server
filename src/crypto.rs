@@ -24,24 +24,25 @@ impl Crypto {
 
     /// Encrypts data in chunks of CHUNK_SIZE.
     /// Format: [4 bytes chunk_size][12 bytes nonce][ciphertext+tag] * N
-    pub fn encrypt_chunked(&self, data: &[u8]) -> Vec<u8> {
+    pub fn encrypt_chunked(&self, data: &[u8]) -> io::Result<Vec<u8>> {
         let mut output = Vec::new();
         let chunk_size = CHUNK_SIZE as u32;
-
-        // Write the chunk size to the beginning of the file.
         output.extend_from_slice(&chunk_size.to_le_bytes());
 
         for chunk in data.chunks(CHUNK_SIZE) {
             let mut nonce_bytes = [0u8; 12];
             rand::rng().fill_bytes(&mut nonce_bytes);
             let nonce = Nonce::from_slice(&nonce_bytes);
-            let encrypted = self.cipher.encrypt(nonce, chunk).unwrap();
+            let encrypted = self
+                .cipher
+                .encrypt(nonce, chunk)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
             output.extend_from_slice(&nonce_bytes);
             output.extend_from_slice(&encrypted);
         }
 
-        output
+        Ok(output)
     }
 
     /// Encrypts data from a chunk iterator and writes the result to the writer.
