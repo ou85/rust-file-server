@@ -21,6 +21,9 @@ This project is being developed as a learning exercise to explore:
 ## Project Structure
 
 ```text
+data/
+├── db/
+└── files/
 src/
 ├── main.rs
 ├── config.rs
