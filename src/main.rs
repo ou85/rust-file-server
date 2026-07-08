@@ -16,23 +16,34 @@ use tools::hashgen;
 use tools::keygen;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
-    // Console apps `cargo run hashgen`, `cargo run keygen`, `cargo run demo`
     let args: Vec<String> = std::env::args().collect();
 
     match args.get(1).map(|s| s.as_str()) {
-        Some("keygen") => keygen::run(32),
-        Some("hashgen") => hashgen::run(None),
-        Some("demo") => App::new().unwrap().demo("README.md").unwrap(),
+        Some("keygen") => {
+            keygen::run(32);
+        }
+        Some("hashgen") => {
+            hashgen::run(None);
+        }
+        Some("demo") => {
+            let app = App::new()?;
+            app.demo("README.md")?;
+        }
         _ => {
-            // HTTP server
             let state = Arc::new(App::new().unwrap());
             let router = create_router(state.clone());
             let addr = config::new_port();
-            let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-            app::App::print_banner(&addr, &state.config.storage_path);
-            axum::serve(listener, router).await.unwrap();
+            let listener = tokio::net::TcpListener::bind(&addr).await?;
+            app::App::print_banner(
+                &addr,
+                &state.config.storage_path,
+                &state.config.database_path,
+            );
+            axum::serve(listener, router).await?;
         }
     }
+
+    Ok(())
 }

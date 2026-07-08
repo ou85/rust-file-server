@@ -6,11 +6,18 @@ use crate::{
     storage::{ChunkIterator, RangeChunkIterator, Storage},
 };
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use std::error::Error;
+use std::fs;
+use std::sync::Arc;
 
 pub struct App {
     pub config: Config,
-    pub storage: Storage,
+    pub storage: Arc<Storage>,
     pub metadata: MetadataStore,
     pub crypto: Crypto,
 }
@@ -19,21 +26,38 @@ impl App {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let config = Config::new();
 
-        let storage = Storage::new(config.storage_path.clone())?;
+        ensure_dir_exists(&config.storage_path)?;
+        ensure_dir_exists(&config.database_path)?;
+
+        let storage = Arc::new(Storage::new(config.storage_path.clone())?);
+
+        let database = if config.database_path == config.storage_path {
+            Arc::clone(&storage)
+        } else {
+            Arc::new(Storage::new(config.database_path.clone())?)
+        };
 
         let metadata = MetadataStore::new(&config)?;
 
         let crypto = Crypto::new(&config.encryption_key);
 
+        println!("=== Storage initialized at: {}", config.storage_path);
+        if !Arc::ptr_eq(&storage, &database) {
+            println!("=== Database initialized at: {}", config.database_path);
+        } else {
+            println!("=== Database uses same path as storage");
+        }
+
         Ok(Self {
             config,
             storage,
+            // database,
             metadata,
             crypto,
         })
     }
 
-    pub fn print_banner(addr: &str, storage_path: &str) {
+    pub fn print_banner(addr: &str, storage_path: &str, db_path: &str) {
         const BLUE: &str = "\x1b[36m";
         const RESET: &str = "\x1b[0m";
 
@@ -41,7 +65,8 @@ impl App {
         println!("rust-file-server v{}", env!("CARGO_PKG_VERSION"));
         println!("──────────────────────────────");
         println!("✓ Storage:   {}", storage_path);
-        println!("✓ Database:  ready");
+        println!("✓ Database:  {}", db_path);
+        // println!("✓ Database:  ready");
         println!();
         println!("→ Server online");
         println!("→ Listening on {}http://{}{}", BLUE, addr, RESET);
@@ -115,4 +140,13 @@ impl App {
             .storage
             .stream_chunks_range(id, &self.crypto, byte_start, byte_end)?)
     }
+}
+
+fn ensure_dir_exists<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn Error>> {
+    let p = path.as_ref();
+    if !p.exists() {
+        fs::create_dir_all(p)?;
+        println!("Created directory: {}", p.display());
+    }
+    Ok(())
 }

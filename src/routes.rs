@@ -15,6 +15,8 @@ use std::sync::Arc;
 
 use axum::body::Body;
 
+use serde_json::json;
+
 pub fn create_router(state: Arc<App>) -> Router {
     Router::new()
         .route("/", get(root))
@@ -84,6 +86,17 @@ async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> im
     }
 }
 
+// async fn list_files(
+//     jar: CookieJar,
+//     State(app): State<Arc<App>>,
+// ) -> Result<Json<Vec<FileMetadata>>, (StatusCode, Json<serde_json::Value>)> {
+//     if let Err(e) = require_user(&jar) {
+//         return Err(e);
+//     }
+
+//     Ok(Json(app.list_files().unwrap()))
+// }
+
 async fn list_files(
     jar: CookieJar,
     State(app): State<Arc<App>>,
@@ -92,7 +105,16 @@ async fn list_files(
         return Err(e);
     }
 
-    Ok(Json(app.list_files().unwrap()))
+    match app.list_files() {
+        Ok(files) => Ok(Json(files)),
+        Err(e) => {
+            tracing::error!("list_files failed: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            ))
+        }
+    }
 }
 
 async fn get_file(

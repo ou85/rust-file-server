@@ -1,5 +1,4 @@
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-// use rand::RngCore;
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::convert::TryFrom;
@@ -20,7 +19,6 @@ impl Crypto {
     }
 
     pub fn decrypt(&self, nonce_bytes: &[u8; 12], data: &[u8]) -> Result<Vec<u8>, aes_gcm::Error> {
-        // let nonce = Nonce::from_slice(nonce_bytes);
         let nonce = Nonce::try_from(nonce_bytes.as_slice()).unwrap();
         self.cipher.decrypt(&nonce, data)
     }
@@ -37,7 +35,6 @@ impl Crypto {
         for chunk in data.chunks(CHUNK_SIZE) {
             let mut nonce_bytes = [0u8; 12];
             rand::rng().fill_bytes(&mut nonce_bytes);
-            // let nonce = Nonce::from_slice(&nonce_bytes);
             let nonce = Nonce::try_from(nonce_bytes.as_slice()).unwrap();
             let encrypted = self.cipher.encrypt(&nonce, chunk).unwrap();
 
@@ -59,7 +56,6 @@ impl Crypto {
             let data = chunk?;
             let mut nonce_bytes = [0u8; 12];
             rand::rng().fill_bytes(&mut nonce_bytes);
-            // let nonce = Nonce::from_slice(&nonce_bytes);
             let nonce = Nonce::try_from(nonce_bytes.as_slice()).unwrap();
             let encrypted = self
                 .cipher

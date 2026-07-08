@@ -14,10 +14,9 @@ pub fn run(password: Option<String>) {
     };
 
     match hash(&password, DEFAULT_COST) {
-        // Ok(hashed) => println!("\n=== Bcrypt hash:\n{}", hashed),
         Ok(hashed) => println!(
             "\n=== Bcrypt hash:\n{}
-         \n=== .env value:\nUSER_PASSWORD_HASH='{}'\nADMIN_PASSWORD_HASH='{}'\n",
+         \n=== .env value:\nRFS_USER_PASSWORD_HASH='{}'\nRFS_ADMIN_PASSWORD_HASH='{}'\n",
             hashed, hashed, hashed
         ),
         Err(e) => eprintln!("Error: {}", e),

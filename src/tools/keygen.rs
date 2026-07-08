@@ -1,5 +1,4 @@
 use base64::{Engine, engine::general_purpose};
-// use rand::Rng;
 use rand::RngExt;
 
 pub fn run(size: usize) {

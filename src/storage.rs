@@ -65,7 +65,7 @@ pub struct Storage {
 impl Storage {
     pub fn new(root_path: String) -> io::Result<Self> {
         fs::create_dir_all(&root_path)?;
-        println!("=== Storage initialized");
+        // println!("=== Storage initialized");
         Ok(Self { root_path })
     }
 
