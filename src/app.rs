@@ -30,28 +30,12 @@ impl App {
         ensure_dir_exists(&config.database_path)?;
 
         let storage = Arc::new(Storage::new(config.storage_path.clone())?);
-
-        let database = if config.database_path == config.storage_path {
-            Arc::clone(&storage)
-        } else {
-            Arc::new(Storage::new(config.database_path.clone())?)
-        };
-
         let metadata = MetadataStore::new(&config)?;
-
         let crypto = Crypto::new(&config.encryption_key);
-
-        println!("=== Storage initialized at: {}", config.storage_path);
-        if !Arc::ptr_eq(&storage, &database) {
-            println!("=== Database initialized at: {}", config.database_path);
-        } else {
-            println!("=== Database uses same path as storage");
-        }
 
         Ok(Self {
             config,
             storage,
-            // database,
             metadata,
             crypto,
         })

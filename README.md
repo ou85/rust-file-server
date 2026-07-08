@@ -25,21 +25,16 @@ data/
 ├── db/
 └── files/
 src/
+├── tools/
+│   ├── hashgen.rs
+│   ├── keygen.rs
+│   └── mod.rs
 ├── main.rs
 ├── config.rs
 ├── crypto.rs
 ├── database.rs
 ├── models.rs
 └── storage.rs
-tools/
-├── keygen/
-│   ├── Cargo.toml
-│   └── src/
-│       └── main.rs
-└── hashgen/
-    ├── Cargo.toml
-    └── src/
-        └── main.rs
 ```
 
 ## Roadmap
@@ -77,16 +72,24 @@ tools/
 - [ ] Multi-user support
 - [ ] Docker deployment
 
-## Building
-
-```bash
-cargo build
-```
-
 ## Running
 
 ```bash
-cargo run
+cargo run -- --relese   
+```
+
+## Building
+
+```bash
+cargo build --release   
+
+```
+
+## Strip binary
+
+```bash
+strip target/release/rust-file-server
+
 ```
 
 ## Utilities
@@ -97,8 +100,7 @@ Generate a cryptographically secure encryption key for the RFS_ENCRYPTION_KEY en
 
 Usage:
 ```bash
-
-cargo run -p keygen
+cargo run keygen
 ```
 Output:
 
@@ -122,7 +124,7 @@ Generate bcrypt password hashes for user and admin authentication.
 Usage:
 ```bash
 
-cargo run -p hashgen
+cargo run hashgen
 ```
 
 Prompt:
