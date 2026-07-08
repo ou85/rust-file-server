@@ -1,0 +1,7 @@
+# random 256-bit (32-byte) key in  Base64
+RFS_ENCRYPTION_KEY=a3f9x2k8mL9pQwErT5yUiOp2sD4fGhJkLmNoPqRs==
+# Password: password
+RFS_USER_PASSWORD_HASH='$2b$12$5QU3Tl1gcmEyFZL/ahdBHOU14UMQYRDkwvrVZufE8.QolJEmMva0e'
+RFS_ADMIN_PASSWORD_HASH='$2b$12$5QU3Tl1gcmEyFZL/ahdBHOU14UMQYRDkwvrVZufE8.QolJEmMva0e'
+# Server's port
+PORT=8080
