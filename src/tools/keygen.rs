@@ -1,7 +1,8 @@
 use base64::{Engine, engine::general_purpose};
-use rand::Rng;
+// use rand::Rng;
+use rand::RngExt;
 
-pub fn generate_key(size: usize) {
+pub fn run(size: usize) {
     let mut rng = rand::rng();
     let key: Vec<u8> = (0..size).map(|_| rng.random()).collect();
 

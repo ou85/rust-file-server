@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-const BASE30: &[u8] = b"123456789ABCDEFGHKMNPRSTUVWXYZ";
+const BASE28: &[u8] = b"123456789ABCDEFGHKMNPRSTVWXZ";
 
 pub fn id_16() -> String {
     let uuid = Uuid::new_v4();
@@ -12,11 +12,11 @@ pub fn id_16() -> String {
         num = (num << 8) | b as u128;
     }
 
-    // Encode the number into base30 using the custom alphabet
+    // Encode the number into BASE28 using the custom alphabet
     let mut out = Vec::new();
     while num > 0 {
-        out.push(BASE30[(num % 30) as usize]);
-        num /= 30;
+        out.push(BASE28[(num % 28) as usize]);
+        num /= 28;
     }
 
     out.reverse();

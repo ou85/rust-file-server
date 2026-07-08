@@ -1,6 +1,8 @@
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-use rand::RngCore;
+// use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
+use std::convert::TryFrom;
 use std::io;
 
 pub const CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8MB
@@ -18,8 +20,9 @@ impl Crypto {
     }
 
     pub fn decrypt(&self, nonce_bytes: &[u8; 12], data: &[u8]) -> Result<Vec<u8>, aes_gcm::Error> {
-        let nonce = Nonce::from_slice(nonce_bytes);
-        self.cipher.decrypt(nonce, data)
+        // let nonce = Nonce::from_slice(nonce_bytes);
+        let nonce = Nonce::try_from(nonce_bytes.as_slice()).unwrap();
+        self.cipher.decrypt(&nonce, data)
     }
 
     /// Encrypts data in chunks of CHUNK_SIZE.
@@ -34,8 +37,9 @@ impl Crypto {
         for chunk in data.chunks(CHUNK_SIZE) {
             let mut nonce_bytes = [0u8; 12];
             rand::rng().fill_bytes(&mut nonce_bytes);
-            let nonce = Nonce::from_slice(&nonce_bytes);
-            let encrypted = self.cipher.encrypt(nonce, chunk).unwrap();
+            // let nonce = Nonce::from_slice(&nonce_bytes);
+            let nonce = Nonce::try_from(nonce_bytes.as_slice()).unwrap();
+            let encrypted = self.cipher.encrypt(&nonce, chunk).unwrap();
 
             output.extend_from_slice(&nonce_bytes);
             output.extend_from_slice(&encrypted);
@@ -55,10 +59,11 @@ impl Crypto {
             let data = chunk?;
             let mut nonce_bytes = [0u8; 12];
             rand::rng().fill_bytes(&mut nonce_bytes);
-            let nonce = Nonce::from_slice(&nonce_bytes);
+            // let nonce = Nonce::from_slice(&nonce_bytes);
+            let nonce = Nonce::try_from(nonce_bytes.as_slice()).unwrap();
             let encrypted = self
                 .cipher
-                .encrypt(nonce, data.as_slice())
+                .encrypt(&nonce, data.as_slice())
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
             writer.write_all(&nonce_bytes)?;

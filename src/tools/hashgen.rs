@@ -1,7 +1,7 @@
 use bcrypt::{DEFAULT_COST, hash};
 use std::io::{self, Write};
 
-pub fn generate_hash(password: Option<String>) {
+pub fn run(password: Option<String>) {
     let password = match password {
         Some(p) => p,
         None => {
