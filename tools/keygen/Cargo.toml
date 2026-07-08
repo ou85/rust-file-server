@@ -1,9 +1,0 @@
-[package]
-name = "keygen"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-rand = "0.8"
-base64 = "0.21"
-hex = "0.4"

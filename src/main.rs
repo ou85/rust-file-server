@@ -3,7 +3,9 @@ mod auth;
 mod config;
 mod crypto;
 mod database;
+mod hashgen;
 mod id;
+mod keygen;
 mod models;
 mod routes;
 mod storage;
@@ -15,13 +17,24 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    // Console app `cargo run -- demo`
+    // Console apps `cargo run hashgen`, `cargo run keygen`, `cargo run demo`
     let args: Vec<String> = std::env::args().collect();
 
-    if args.len() > 1 && args[1] == "demo" {
-        let app = App::new().unwrap();
-        app.demo("real03.txt").unwrap();
-        return;
+    match args.get(1).map(|s| s.as_str()) {
+        Some("keygen") => {
+            keygen::generate_key(32);
+            return;
+        }
+        Some("hashgen") => {
+            hashgen::generate_hash(None);
+            return;
+        }
+        Some("demo") => {
+            let app = App::new().unwrap();
+            app.demo("README.md").unwrap();
+            return;
+        }
+        _ => {}
     }
 
     // HTTP server
