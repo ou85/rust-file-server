@@ -134,13 +134,33 @@
             for (const file of input.files) {
                 form.append('files', file);
             }
-            await fetch('/files/upload', {
-                method: 'POST',
-                body: form
-            });
-            input.value = '';
-            load();
-        }
+            
+            // Upload start
+            const uploadBtn = document.querySelector('.upload-button');
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
+            
+            try {
+                await fetch('/files/upload', {
+                    method: 'POST',
+                    body: form
+                });
+                
+                // Upload end
+                uploadBtn.textContent = 'Uploaded!';
+                setTimeout(() => {
+                    uploadBtn.textContent = 'Upload';
+                    uploadBtn.disabled = false;
+                }, 2000);
+                
+                input.value = '';
+                load();
+            } catch (error) {
+                uploadBtn.textContent = 'Upload';
+                uploadBtn.disabled = false;
+                alert('Upload failed: ' + error);
+            }
+        }   
         function formatDate(ts) {
             const d = new Date(ts * 1000);
             const yyyy = d.getFullYear().toString();

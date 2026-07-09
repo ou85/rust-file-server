@@ -321,6 +321,14 @@ async fn upload_files(
             buffer.extend_from_slice(&bytes);
             total_bytes += bytes.len() as u64;
 
+            // Upload indicator
+            print!(
+                "\rUploading {}: {:.2} MB",
+                filename,
+                total_bytes as f64 / 1024.0 / 1024.0
+            );
+            std::io::stdout().flush().unwrap();
+
             // Accumulated a full chunk — encrypt and write
             while buffer.len() >= CHUNK_SIZE {
                 let chunk = buffer[..CHUNK_SIZE].to_vec();
@@ -375,7 +383,7 @@ async fn upload_files(
         })?;
 
         println!(
-            "=== Uploaded: {} ({:.2} MB)",
+            "\n>Uploaded {} [{:.2} MB]",
             filename,
             total_bytes as f64 / 1024.0 / 1024.0
         );
