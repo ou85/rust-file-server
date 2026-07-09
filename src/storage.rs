@@ -118,7 +118,6 @@ impl Storage {
     }
 
     /// Reads an encrypted file and returns an iterator over the decrypted chunks (one chunk ~8MB )
-    // pub fn stream_chunks(&self, id: &str, crypto: &Crypto) -> io::Result<ChunkIterator> {
     pub fn stream_chunks(&self, id: &str, crypto: &Crypto) -> io::Result<ChunkIterator> {
         let path = self.file_path(id);
         let data = fs::read(path)?;
@@ -173,7 +172,7 @@ impl Storage {
         byte_end: u64,
     ) -> io::Result<RangeChunkIterator> {
         let path = self.file_path(id);
-        let data = fs::read(path)?; // Temporarily restored fs::read for diagnostic purposes.
+        let data = fs::read(path)?;
 
         if data.len() < 4 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "file too small"));
@@ -200,8 +199,6 @@ impl Storage {
             remaining,
         ))
     }
-
-    // =======================================
 
     pub fn create_file_writer(&self, id: &str) -> io::Result<std::fs::File> {
         let path = self.file_path(id);
