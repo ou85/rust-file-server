@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.demo("README.md")?;
         }
         _ => {
-            let state = Arc::new(App::new().unwrap());
+            let state = Arc::new(App::new()?);
             let router = create_router(state.clone());
             let addr = config::new_port();
             let listener = tokio::net::TcpListener::bind(&addr).await?;
