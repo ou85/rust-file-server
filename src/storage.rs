@@ -1,11 +1,10 @@
 use crate::{crypto::Crypto, models::StoredFile};
-use std::io::{BufReader, Read};
 use std::{fs, io, path::Path};
 
 /// Iterator over decrypted chunks for a byte range.
 /// Skips chunks before the range, decrypts only what's needed.
 pub struct RangeChunkIterator {
-    data: Vec<u8>,
+    data: Option<Vec<u8>>,
     offset: usize,
     frame_size: usize,
     crypto: Crypto,
@@ -13,6 +12,30 @@ pub struct RangeChunkIterator {
     last_chunk: usize,
     skip_bytes: usize,
     remaining: usize,
+}
+
+impl RangeChunkIterator {
+    fn from_memory(
+        data: Vec<u8>,
+        offset: usize,
+        frame_size: usize,
+        crypto: Crypto,
+        current_chunk: usize,
+        last_chunk: usize,
+        skip_bytes: usize,
+        remaining: usize,
+    ) -> Self {
+        Self {
+            data: Some(data),
+            offset,
+            frame_size,
+            crypto,
+            current_chunk,
+            last_chunk,
+            skip_bytes,
+            remaining,
+        }
+    }
 }
 
 impl Iterator for RangeChunkIterator {
@@ -23,20 +46,38 @@ impl Iterator for RangeChunkIterator {
             return None;
         }
 
-        let end = (self.offset + self.frame_size).min(self.data.len());
-        let frame = &self.data[self.offset..end];
+        let nonce_bytes: [u8; 12];
+        let ciphertext: Vec<u8>;
 
-        if frame.len() < 12 {
+        // Read from RAM if data is available
+        if let Some(ref data) = self.data {
+            let end = (self.offset + self.frame_size).min(data.len());
+            let frame = &data[self.offset..end];
+
+            if frame.len() < 12 {
+                return Some(Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "corrupt chunk",
+                )));
+            }
+
+            nonce_bytes = frame[..12].try_into().unwrap();
+            ciphertext = frame[12..].to_vec();
+            self.offset += frame.len();
+        } else {
+            // Otherwise, read from the disk
             return Some(Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "corrupt chunk",
+                io::ErrorKind::Other,
+                "disk streaming not yet implemented",
             )));
         }
 
-        let nonce_bytes: [u8; 12] = frame[..12].try_into().unwrap();
-        let ciphertext = &frame[12..];
+        self.current_chunk += 1;
 
-        let plain = match self.crypto.decrypt(&nonce_bytes, ciphertext) {
+        let start = self.skip_bytes;
+        self.skip_bytes = 0;
+
+        let plain = match self.crypto.decrypt(&nonce_bytes, &ciphertext) {
             Ok(p) => p,
             Err(_) => {
                 return Some(Err(io::Error::new(
@@ -45,12 +86,6 @@ impl Iterator for RangeChunkIterator {
                 )));
             }
         };
-
-        self.offset += frame.len();
-        self.current_chunk += 1;
-
-        let start = self.skip_bytes;
-        self.skip_bytes = 0;
 
         let available = &plain[start..];
         let take = available.len().min(self.remaining);
@@ -83,18 +118,20 @@ impl Storage {
     }
 
     /// Reads an encrypted file and returns an iterator over the decrypted chunks (one chunk ~8MB )
+    // pub fn stream_chunks(&self, id: &str, crypto: &Crypto) -> io::Result<ChunkIterator> {
     pub fn stream_chunks(&self, id: &str, crypto: &Crypto) -> io::Result<ChunkIterator> {
         let path = self.file_path(id);
-        let file = fs::File::open(path)?;
-        let mut reader = BufReader::new(file);
+        let data = fs::read(path)?;
 
-        // Read the header (4 bytes chunk size)
-        let mut header = [0u8; 4];
-        reader.read_exact(&mut header)?;
-        let chunk_size = u32::from_le_bytes(header) as usize;
+        if data.len() < 4 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "file too small"));
+        }
+
+        let chunk_size = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
 
         Ok(ChunkIterator {
-            reader,
+            data,
+            offset: 4,
             chunk_size,
             crypto: crypto.clone(),
         })
@@ -136,45 +173,44 @@ impl Storage {
         byte_end: u64,
     ) -> io::Result<RangeChunkIterator> {
         let path = self.file_path(id);
-        let data = fs::read(path)?;
+        let data = fs::read(path)?; // Temporarily restored fs::read for diagnostic purposes.
 
         if data.len() < 4 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "file too small"));
         }
 
         let chunk_size = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
-        let frame_size = 12 + chunk_size + 16; // nonce + ciphertext + GCM tag
+        let frame_size = 12 + chunk_size + 16;
 
         let first_chunk = byte_start as usize / chunk_size;
         let last_chunk = byte_end as usize / chunk_size;
         let skip_bytes = byte_start as usize % chunk_size;
         let remaining = (byte_end - byte_start + 1) as usize;
 
-        // Fast-forward directly to the required chunk, skipping the previous ones
         let offset = 4 + first_chunk * frame_size;
 
-        Ok(RangeChunkIterator {
+        Ok(RangeChunkIterator::from_memory(
             data,
             offset,
             frame_size,
-            crypto: crypto.clone(),
-            current_chunk: first_chunk,
+            crypto.clone(),
+            first_chunk,
             last_chunk,
             skip_bytes,
             remaining,
-        })
+        ))
     }
+
+    // =======================================
 
     pub fn create_file_writer(&self, id: &str) -> io::Result<std::fs::File> {
         let path = self.file_path(id);
         Ok(std::fs::File::create(path)?)
     }
 }
-
-/// Iterator over decrypted chunks, reading from disk via BufReader.
-/// Only one frame (~8MB + GCM tag) in RAM at a time.
 pub struct ChunkIterator {
-    reader: BufReader<fs::File>,
+    data: Vec<u8>,
+    offset: usize,
     chunk_size: usize,
     crypto: Crypto,
 }
@@ -183,24 +219,32 @@ impl Iterator for ChunkIterator {
     type Item = io::Result<Vec<u8>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Read the nonce (12 bytes)
-        let mut nonce_bytes = [0u8; 12];
-        match self.reader.read_exact(&mut nonce_bytes) {
-            Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return None,
-            Err(e) => return Some(Err(e)),
+        if self.offset >= self.data.len() {
+            return None;
         }
 
-        // Read ciphertext + 16-byte GCM tag
+        // chunk ciphertext = plaintext + 16 bytes GCM tag
         let ct_size = self.chunk_size + 16;
-        let mut ciphertext = vec![0u8; ct_size];
-        if let Err(e) = self.reader.read_exact(&mut ciphertext) {
-            return Some(Err(e));
+        // nonce (12) + ciphertext
+        let frame_size = 12 + ct_size;
+        let end = (self.offset + frame_size).min(self.data.len());
+        let frame = &self.data[self.offset..end];
+
+        if frame.len() < 12 {
+            return Some(Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "corrupt chunk",
+            )));
         }
 
-        // Decoding
-        match self.crypto.decrypt(&nonce_bytes, &ciphertext) {
-            Ok(plain) => Some(Ok(plain)),
+        let nonce_bytes: [u8; 12] = frame[..12].try_into().unwrap();
+        let ciphertext = &frame[12..];
+
+        match self.crypto.decrypt(&nonce_bytes, ciphertext) {
+            Ok(plain) => {
+                self.offset += frame.len();
+                Some(Ok(plain))
+            }
             Err(_) => Some(Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "decryption failed",
