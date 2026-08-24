@@ -98,6 +98,57 @@
             filter: brightness(0.6);
             transform: scale(0.98);
         }
+
+    
+    .modal-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.5);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal-box {
+        background: #fff;
+        border-radius: 10px;
+        padding: 1.5rem 2rem;
+        max-width: 24rem;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    }
+    .modal-box p {
+        margin: 0 0 1.5rem 0;
+        font-size: 1rem;
+        color: #202124;
+    }
+    .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.75rem;
+    }
+    .modal-actions button {
+        padding: 0.5rem 1.25rem;
+        border-radius: 0.35rem;
+        cursor: pointer;
+        font-weight: 500;
+        font-size: 0.9rem;
+    }
+    .modal-btn-yes {
+        background: #d93025;
+        color: white;
+        border: 1px solid #d93025;
+    }
+    .modal-btn-yes:hover { background: #b3261e; }
+    .modal-btn-no {
+        background: #f1f3f4;
+        color: #202124;
+        border: 1px solid #f1f3f4;
+    }
+    .modal-btn-no:hover { background: #e0e0e0; }
+
+
+
     </style>
 </head>
 <body>
@@ -135,8 +186,32 @@
             </tr>`;
             });
         }
-        function openFile(id) { window.open('/files/' + id + '/open', '_blank'); }
-        function downloadFile(id) { window.location = '/files/' + id + '/download'; }
+        // function openFile(id) { window.open('/files/' + id + '/open', '_blank'); }
+        // function downloadFile(id) { window.location = '/files/' + id + '/download'; }
+
+
+        async function openFile(id) {
+            const url = '/files/' + id + '/open';
+            const exists = await checkFileExists(id, url);
+            if (!exists) {
+                showFileNotFoundModal(id);
+                return;
+            }
+            window.open(url, '_blank');
+        }
+
+        async function downloadFile(id) {
+            const url = '/files/' + id + '/download';
+            const exists = await checkFileExists(id, url);
+            if (!exists) {
+                showFileNotFoundModal(id);
+                return;
+            }
+            window.location = url;
+        }
+
+
+
         async function deleteFile(id) {
             if (!confirm("Delete file?")) {
                 return;
@@ -203,7 +278,56 @@
             });
             window.location.href = '/login';
         }
+
+
+        let pendingDeleteId = null;
+
+        function showFileNotFoundModal(id) {
+            pendingDeleteId = id;
+            document.getElementById('fileNotFoundModal').classList.add('active');
+        }
+
+        function closeModal() {
+            pendingDeleteId = null;
+            document.getElementById('fileNotFoundModal').classList.remove('active');
+        }
+
+        async function confirmDeleteMissing() {
+            if (pendingDeleteId) {
+                await fetch('/files/' + pendingDeleteId, { method: 'DELETE' });
+                closeModal();
+                load();
+            }
+        }
+
+        async function checkFileExists(id, url) {
+            try {
+                const res = await fetch(url, { method: 'HEAD' });
+                return res.ok;
+            } catch {
+                return false;
+            }
+        }
+
+
+
+
         load();
     </script>
+
+
+    <div class="modal-overlay" id="fileNotFoundModal">
+        <div class="modal-box">
+            <p>File not found. Delete entry?</p>
+            <div class="modal-actions">
+                <button class="modal-btn-no" onclick="closeModal()">NO</button>
+                <button class="modal-btn-yes" onclick="confirmDeleteMissing()">YES</button>
+            </div>
+        </div>
+    </div>
+
+
+
+
 </body>
 </html>

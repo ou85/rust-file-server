@@ -137,13 +137,13 @@ Output:
 Bcrypt hash: $2b$12$5QU3Tl1gcmEyFZL/ahdBHOU14UMQYRDkwvrVZufE8.QolJEmMva0e
 ```
 
-Add the hash to your .env file, wrapped in double quotes to prevent shell interpolation of the $ symbol:
+Add the hash to your .env file, wrapped in double quotes or single quotes '...HASH...' to prevent shell interpolation of the $ symbol:
 ```env
 
 RFS_USER_PASSWORD_HASH='$2b$12$5QU3Tl1gcmEyFZL/ahdBHOU14UMQYRDkwvrVZufE8.QolJEmMva0e'
 RFS_ADMIN_PASSWORD_HASH=\$2b\$12\$...
 ```
-⚠️ Important: Always enclose bcrypt hashes in double quotes in .env files to avoid truncation caused by $ symbol expansion.
+⚠️ Important: Always enclose bcrypt hashes in double quotes in .env files to avoid truncation caused by $ symbol expansion.  ( in some cases single quotes works better )
 
 ## License
 
