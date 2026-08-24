@@ -15,14 +15,20 @@
             margin-bottom: 1rem;
         }
         .logout-button {
-            padding: 0.3rem 1.6rem;
-            border: 1px solid #ff8983;
-            border-radius: 0.25rem;
-            font-weight: 500;
+            height: 4rem;
+            width: 4rem;
+            border: 1px solid #00afa9;
+            /* border: 1px solid #1dc204; */
+            border-radius: 2rem;
+            color:#00afa9;
+            /* color:#1dc204; */
+            font-size: 1.5rem;
             cursor: pointer;
+            margin-bottom: -1rem;
+
         }
-        .logout-button:hover {background: #ff8983;border: 1px solid #d93025;}
-        .logout-button:active {background: #ac5d59;border: 2px solid #ff5549;;}
+        .logout-button:hover {background:#ff8983;border:1px solid #d93025; color:#d93025;}
+        .logout-button:active {background:#d93025;border:1px solid #ff8983;color:#e0e0e0;scale:(0.98);}
         .upload-card {
             background: #fff;
             border-radius: 10px;
@@ -49,7 +55,7 @@
             width: 7.5rem;
             height: 2.625rem;
             border: 1px solid #1a73e8;
-            border-radius: 0.25rem;
+            border-radius: 0.35rem;
             background: #1a73e8;
             color: white;
             font-weight: 600;
@@ -72,16 +78,26 @@
         td button {
             margin: 0.5rem 0.2rem;
             padding: 0.6rem 0.8rem;
-            border-radius: 0.25rem;
+            border-radius: 0.45rem;
             cursor: pointer;
             font-size: 0.85rem;
             font-weight: 500;
+            height: 2.5rem;
+            min-width: 2.875rem;
         }
         td button:nth-child(1) { background: #e8f0fe; color: #1a73e8; border: 1px solid #e8f0fe}
         td button:nth-child(2) { background: #f1f3f4; color: #202124; border: 1px solid #f1f3f4}
         td button:nth-child(3) { background: #fce8e6; color: #d93025; border: 1px solid #fce8e6}
-        td button:hover { opacity: 0.9; border: 1px solid blueviolet }
-        td button:active { opacity: 1; border:1px solid rgb(95, 18, 18) }
+        /* td button:hover { opacity: 0.9; border: 1px solid blueviolet }
+        td button:active { opacity: 0.5; border:1px solid rgb(95, 18, 18) } */
+        td button:hover { 
+            filter: brightness(0.85);
+            border: 1px solid blueviolet
+        }
+        td button:active { 
+            filter: brightness(0.6);
+            transform: scale(0.98);
+        }
     </style>
 </head>
 <body>
@@ -112,9 +128,9 @@
                     ${formatDate(f.created_at)}
                 </td>
                 <td style="width: 17rem;">
-                    <button onclick="openFile('${f.id}')" style="padding:0.6rem 1rem;">Open</button>
-                    <button onclick="downloadFile('${f.id}')">Download</button>
-                    <button onclick="deleteFile('${f.id}')">Delete</button>
+                    <button onclick="openFile('${f.id}')" style="padding:0.6rem 1rem;margin-right:2rem;">Open</button>
+                    <button onclick="downloadFile('${f.id}')" style="padding:0.6rem 1rem;">⭳</button>
+                    <button onclick="deleteFile('${f.id}')" style="padding:0.6rem 1rem;">&#128465</button>
                 </td>
             </tr>`;
             });
@@ -148,8 +164,12 @@
                 
                 // Upload end
                 uploadBtn.textContent = 'Uploaded!';
+                uploadBtn.style.backgroundColor = '#4caf50';
+                uploadBtn.style.color = 'white';
                 setTimeout(() => {
                     uploadBtn.textContent = 'Upload';
+                    uploadBtn.style.backgroundColor = '';
+                    uploadBtn.style.color = '';
                     uploadBtn.disabled = false;
                 }, 2000);
                 

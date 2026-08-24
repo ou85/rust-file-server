@@ -86,17 +86,6 @@ async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> im
     }
 }
 
-// async fn list_files(
-//     jar: CookieJar,
-//     State(app): State<Arc<App>>,
-// ) -> Result<Json<Vec<FileMetadata>>, (StatusCode, Json<serde_json::Value>)> {
-//     if let Err(e) = require_user(&jar) {
-//         return Err(e);
-//     }
-
-//     Ok(Json(app.list_files().unwrap()))
-// }
-
 async fn list_files(
     jar: CookieJar,
     State(app): State<Arc<App>>,
