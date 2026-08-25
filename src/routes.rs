@@ -397,6 +397,20 @@ async fn logout() -> impl IntoResponse {
     )
 }
 
+
+// ----------------
+// Logout on tab close or reload
+// async fn logout() -> impl IntoResponse {
+//     (
+//         StatusCode::OK,
+//         [(
+//             header::SET_COOKIE,
+//             "rfs_role=; Path=/; Max-Age=0; HttpOnly".to_string(),
+//         )],
+//     )
+// }
+// ----------------
+
 fn require_auth(jar: &CookieJar) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     match jar.get("rfs_role") {
         Some(cookie) if cookie.value() == "user" || cookie.value() == "admin" => Ok(()),

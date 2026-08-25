@@ -1,95 +1,163 @@
 <!DOCTYPE html>
 <html lang="eng">
-    <head>
-        <title>RSFS</title>
-        <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
-        <meta charset="UTF-8">
-        <style>
-            body {
-                margin: 0;
-                padding: 0;
-                font-family: "Roboto", sans-serif;
-                background: #f5f5f5;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100vh;}
-            .card {
-                background: white;
-                padding: 2rem 2.5rem;
-                border-radius: 0.75rem;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-                width: 22.5rem;
-                display: flex;
-                flex-direction: column;
-                gap: 1.5rem;}
-            h1 {
-                margin: 0;
-                font-size: 1.8rem;
-                font-weight: 500;
-                color: #333;
-                text-align: center;}
-            form {
-                display: flex;
-                flex-direction: column;
-                gap: 1rem; 
-                width: 100%;}
-            .input-field {width: 100%;}
-            .input-field input {
-                width: 100%;
-                padding: 0.9rem 0.75rem;
-                border: 1px solid #ccc;
-                border-radius: 0.375rem;
-                font-size: 1rem;
-                transition: border-color 0.2s, box-shadow 0.2s;
-                background: white;
-                box-sizing: border-box;}
-            .input-field input:focus {
-                outline: none;
-                border-color: #1a73e8;
-                box-shadow: 0 0 0 3px rgba(26,115,232,0.2);}
-            button {
-                width: 100%;
-                padding: 0.9rem;
-                background: #1a73e8;
-                color: white;
-                border: 2px solid white;
-                border-radius: 0.375rem;
-                font-size: 1rem;
-                font-weight: 600;
-                cursor: pointer;
-                transition: background 0.2s;
-                box-sizing: border-box;}
-            button:hover {background: #0f4fa8;border: 2px solid #08abd4;}
-            button:active {background: #0f4fa8;border: 2px solid #5f0571;}
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>RSFS</h1>
+<head>
+    <title>RSFS</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
+    <meta charset="UTF-8">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: "Roboto", sans-serif;
+            background: #f5f5f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .card {
+            background: white;
+            padding: 2rem 2.5rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            width: 22.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+        h1 {
+            margin: 0;
+            font-size: 1.8rem;
+            font-weight: 500;
+            color: #333;
+            text-align: center;
+        }
+        form {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            width: 100%;
+        }
+        .input-field { width: 100%; }
+        .input-field input {
+            width: 100%;
+            padding: 0.9rem 0.75rem;
+            border: 1px solid #ccc;
+            border-radius: 0.375rem;
+            font-size: 1rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            background: white;
+            box-sizing: border-box;
+        }
+        .input-field input:focus {
+            outline: none;
+            border-color: #1a73e8;
+            box-shadow: 0 0 0 3px rgba(26,115,232,0.2);
+        }
+        .input-field input.error {
+            border-color: #d93025;
+            box-shadow: 0 0 0 3px rgba(217,48,37,0.15);
+        }
+        button {
+            width: 100%;
+            padding: 0.9rem;
+            background: #1a73e8;
+            color: white;
+            border: 2px solid white;
+            border-radius: 0.375rem;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            box-sizing: border-box;
+        }
+        button:hover { background: #0f4fa8; border: 2px solid #08abd4; }
+        button:active {
+            background: #0f4fa8;
+            border: 2px solid #0f4fa8;
+            filter: brightness(0.8);
+        }
+        .error-message {
+            color: #d93025;
+            font-size: 0.85rem;
+            text-align: center;
+            margin: -0.5rem 0 0 0;
+            height: 0;
+            opacity: 0;
+            overflow: hidden;
+            transition: opacity 0.2s ease, height 0.2s ease;
+        }
+        .error-message.active {
+            height: 1.2rem;
+            opacity: 1;
+        }
+        .card.shake {
+            animation: shake 0.3s ease;
+        }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20% { transform: translateX(-6px); }
+            40% { transform: translateX(6px); }
+            60% { transform: translateX(-4px); }
+            80% { transform: translateX(4px); }
+        }
+    </style>
+</head>
+<body>
+    <div class="card" id="loginCard">
+        <h1>RSFS</h1>
             <form id="loginForm">
-                <div class="input-field">
-                    <input id="username" type="text" placeholder="Username">
-                </div>
-                <div class="input-field">
-                    <input id="password" type="password" autocomplete="current-password" placeholder="Password">
-                </div>
-                <button type="submit">Login</button>
-            </form>
-        </div>
-        <script>
-            document.getElementById('loginForm').onsubmit = async (e) => {
-                e.preventDefault();
-                const res = await fetch('/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type':'application/json' },
-                    body: JSON.stringify({
-                        username: username.value,
-                        password: password.value
-                    })
-                });
-                if(res.ok){location.href='/';}else{alert("Login failed");}
+            <div class="input-field">
+            <input id="username" type="text" placeholder="Username">
+            </div>
+            <div class="input-field">
+            <input id="password" type="password" autocomplete="current-password" placeholder="Password">
+            </div>
+            <p class="error-message" id="errorMessage">Incorrect username or password</p>
+            <button type="submit">Login</button>
+        </form>
+    </div>
+    <script>
+        document.getElementById('loginForm').onsubmit = async (e) => {
+            e.preventDefault();
+
+            const usernameInput = document.getElementById('username');
+            const passwordInput = document.getElementById('password');
+            const errorMsg = document.getElementById('errorMessage');
+            const card = document.getElementById('loginCard');
+
+            const res = await fetch('/login', {
+                method: 'POST',
+                headers: { 'Content-Type':'application/json' },
+                body: JSON.stringify({
+                    username: usernameInput.value,
+                    password: passwordInput.value
+                })
+            });
+
+            if (res.ok) {
+                location.href = '/';
+            } else {
+                usernameInput.classList.add('error');
+                passwordInput.classList.add('error');
+                errorMsg.classList.add('active');
+
+                card.classList.remove('shake');
+                void card.offsetWidth; 
+                card.classList.add('shake');
+
+                passwordInput.value = '';
+                passwordInput.focus();
             }
-        </script>
-    </body>
+        };
+
+        ['username', 'password'].forEach(id => {
+            document.getElementById(id).addEventListener('input', () => {
+                document.getElementById('username').classList.remove('error');
+                document.getElementById('password').classList.remove('error');
+                document.getElementById('errorMessage').classList.remove('active');
+            });
+        });
+    </script>
+</body>
 </html>

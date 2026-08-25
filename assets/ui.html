@@ -210,6 +210,12 @@
         // function openFile(id) { window.open('/files/' + id + '/open', '_blank'); }
         // function downloadFile(id) { window.location = '/files/' + id + '/download'; }
 
+        // Logout on tab close or reload
+        // window.addEventListener('beforeunload', () => {
+        //     navigator.sendBeacon('/logout', new Blob([], {type: 'application/json'}));
+        // });
+
+
         async function openFile(id) {
             const url = '/files/' + id + '/open';
             const exists = await checkFileExists(id, url);
