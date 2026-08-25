@@ -85,8 +85,21 @@ impl App {
         Ok(files)
     }
 
+    // pub fn delete_file(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    //     self.storage.delete_file(id)?;
+    //     self.metadata.delete_file(id)?;
+
+    //     Ok(())
+    // }
     pub fn delete_file(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.storage.delete_file(id)?;
+        // Attempt to delete the file from the disk, but do not fail if the file is missing.
+        match self.storage.delete_file(id) {
+            Ok(_) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            },
+            Err(e) => return Err(Box::new(e)),
+        }
+
         self.metadata.delete_file(id)?;
 
         Ok(())
