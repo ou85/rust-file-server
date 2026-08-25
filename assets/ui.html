@@ -25,7 +25,6 @@
             font-size: 1.5rem;
             cursor: pointer;
             margin-bottom: -1rem;
-
         }
         .logout-button:hover {background:#ff8983;border:1px solid #d93025; color:#d93025;}
         .logout-button:active {background:#d93025;border:1px solid #ff8983;color:#e0e0e0;scale:(0.98);}
@@ -98,57 +97,52 @@
             filter: brightness(0.6);
             transform: scale(0.98);
         }
-
-    
-    .modal-overlay {
-        display: none;
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0,0,0,0.5);
-        z-index: 1000;
-        align-items: center;
-        justify-content: center;
-    }
-    .modal-overlay.active { display: flex; }
-    .modal-box {
-        background: #fff;
-        border-radius: 10px;
-        padding: 1.5rem 2rem;
-        max-width: 24rem;
-        box-shadow: 0 4px 16px rgba(0,0,0,0.2);
-    }
-    .modal-box p {
-        margin: 0 0 1.5rem 0;
-        font-size: 1rem;
-        color: #202124;
-    }
-    .modal-actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 0.75rem;
-    }
-    .modal-actions button {
-        padding: 0.5rem 1.25rem;
-        border-radius: 0.35rem;
-        cursor: pointer;
-        font-weight: 500;
-        font-size: 0.9rem;
-    }
-    .modal-btn-yes {
-        background: #d93025;
-        color: white;
-        border: 1px solid #d93025;
-    }
-    .modal-btn-yes:hover { background: #b3261e; }
-    .modal-btn-no {
-        background: #f1f3f4;
-        color: #202124;
-        border: 1px solid #f1f3f4;
-    }
-    .modal-btn-no:hover { background: #e0e0e0; }
-
-
-
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-box {
+            background: #fff;
+            border-radius: 10px;
+            padding: 1.5rem 2rem;
+            max-width: 24rem;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+        }
+        .modal-box p {
+            margin: 0 0 1.5rem 0;
+            font-size: 1rem;
+            color: #202124;
+        }
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+        }
+        .modal-actions button {
+            padding: 0.5rem 1.25rem;
+            border-radius: 0.35rem;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+        .modal-btn-yes {
+            background: #d93025;
+            color: white;
+            border: 1px solid #d93025;
+        }
+        .modal-btn-yes:hover { background: #b3261e; }
+        .modal-btn-no {
+            background: #f1f3f4;
+            color: #202124;
+            border: 1px solid #f1f3f4;
+        }
+        .modal-btn-no:hover { background: #e0e0e0; }
     </style>
 </head>
 <body>
@@ -182,19 +176,18 @@
                     <button onclick="openFile('${f.id}')" style="padding:0.6rem 1rem;margin-right:2rem;">Open</button>
                     <button onclick="downloadFile('${f.id}')" style="padding:0.6rem 1rem;">⭳</button>
                     <button onclick="deleteFile('${f.id}')" style="padding:0.6rem 1rem;">&#128465</button>
-                </td>
+                    </td>
             </tr>`;
             });
         }
         // function openFile(id) { window.open('/files/' + id + '/open', '_blank'); }
         // function downloadFile(id) { window.location = '/files/' + id + '/download'; }
 
-
         async function openFile(id) {
             const url = '/files/' + id + '/open';
             const exists = await checkFileExists(id, url);
             if (!exists) {
-                showFileNotFoundModal(id);
+                showConfirmModal('File not found. Delete the entry?', () => deleteFile(id, true));
                 return;
             }
             window.open(url, '_blank');
@@ -204,21 +197,25 @@
             const url = '/files/' + id + '/download';
             const exists = await checkFileExists(id, url);
             if (!exists) {
-                showFileNotFoundModal(id);
+                showConfirmModal('File not found. Delete the entry?', () => deleteFile(id, true));
                 return;
             }
             window.location = url;
         }
 
-
-
-        async function deleteFile(id) {
-            if (!confirm("Delete file?")) {
+        async function deleteFile(id, skipConfirm) {
+            if (!skipConfirm) {
+                showConfirmModal('Permanently delete this file?', () => performDelete(id));
                 return;
             }
+            performDelete(id);
+        }
+
+        async function performDelete(id) {
             await fetch('/files/' + id, { method: 'DELETE' });
             load();
         }
+
         async function upload() {
             const input = document.getElementById('file');
             const form = new FormData();
@@ -256,6 +253,7 @@
                 alert('Upload failed: ' + error);
             }
         }   
+
         function formatDate(ts) {
             const d = new Date(ts * 1000);
             const yyyy = d.getFullYear().toString();
@@ -266,12 +264,14 @@
 
             return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
         }
+
         function formatSize(bytes) {
             if (bytes < 1024) return bytes + " B";
             if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
             if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
             return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
         }
+
         async function logout() {
             await fetch('/logout', {
                 method: 'POST'
@@ -279,25 +279,24 @@
             window.location.href = '/login';
         }
 
+        let confirmCallback = null;
 
-        let pendingDeleteId = null;
-
-        function showFileNotFoundModal(id) {
-            pendingDeleteId = id;
-            document.getElementById('fileNotFoundModal').classList.add('active');
+        function showConfirmModal(text, onConfirm) {
+            document.getElementById('confirmModalText').textContent = text;
+            confirmCallback = onConfirm;
+            document.getElementById('confirmModal').classList.add('active');
         }
 
-        function closeModal() {
-            pendingDeleteId = null;
-            document.getElementById('fileNotFoundModal').classList.remove('active');
+        function closeConfirmModal() {
+            confirmCallback = null;
+            document.getElementById('confirmModal').classList.remove('active');
         }
 
-        async function confirmDeleteMissing() {
-            if (pendingDeleteId) {
-                await fetch('/files/' + pendingDeleteId, { method: 'DELETE' });
-                closeModal();
-                load();
+        function confirmModalAction() {
+            if (confirmCallback) {
+                confirmCallback();
             }
+            closeConfirmModal();
         }
 
         async function checkFileExists(id, url) {
@@ -309,25 +308,18 @@
             }
         }
 
-
-
-
         load();
     </script>
 
-
-    <div class="modal-overlay" id="fileNotFoundModal">
+    <div class="modal-overlay" id="confirmModal">
         <div class="modal-box">
-            <p>File not found. Delete the entry?</p>
+            <p id="confirmModalText">DELETE FILE?</p>
             <div class="modal-actions">
-                <button class="modal-btn-no" onclick="closeModal()">NO</button>
-                <button class="modal-btn-yes" onclick="confirmDeleteMissing()">YES</button>
+                <button class="modal-btn-no" onclick="closeConfirmModal()">NO</button>
+                <button class="modal-btn-yes" onclick="confirmModalAction()">YES</button>
             </div>
         </div>
     </div>
-
-
-
 
 </body>
 </html>
