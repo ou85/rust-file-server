@@ -107,7 +107,7 @@ impl App {
     pub fn demo(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let metadata = self.import_file(path)?;
 
-        println!("=== Imported: {} ({})", metadata.filename, metadata.id);
+        println!("\n=== Imported: {} ({})", metadata.filename, metadata.id);
 
         for file in self.list_files()? {
             println!("{} | {} | {} bytes", file.id, file.filename, file.size,);

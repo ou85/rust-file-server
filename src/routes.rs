@@ -60,7 +60,7 @@ async fn login_page() -> Html<&'static str> {
 async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> impl IntoResponse {
     match authenticate(&req.username, &req.password, &app.config) {
         Some(role) => {
-            println!("=== Login success");
+            println!("\n=== Login success");
             let value = match role {
                 UserRole::User => "user",
                 UserRole::Admin => "admin",
@@ -76,7 +76,7 @@ async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> im
         }
 
         None => {
-            println!("=== Login failed");
+            println!("\n=== Login failed");
 
             (
                 StatusCode::UNAUTHORIZED,
@@ -311,9 +311,13 @@ async fn upload_files(
             total_bytes += bytes.len() as u64;
 
             // Upload indicator
+            // print!(
+            //     "\rUploading {}: {:.2} MB",
+            //     filename,
+            //     total_bytes as f64 / 1024.0 / 1024.0
+            // );
             print!(
-                "\rUploading {}: {:.2} MB",
-                filename,
+                "\rUploading {:.2} MB",
                 total_bytes as f64 / 1024.0 / 1024.0
             );
             std::io::stdout().flush().unwrap();
@@ -372,8 +376,7 @@ async fn upload_files(
         })?;
 
         println!(
-            "\n>Uploaded {} [{:.2} MB]",
-            filename,
+            "\nUploaded  {:.2} MB",
             total_bytes as f64 / 1024.0 / 1024.0
         );
 
@@ -396,7 +399,6 @@ async fn logout() -> impl IntoResponse {
         )],
     )
 }
-
 
 // ----------------
 // Logout on tab close or reload

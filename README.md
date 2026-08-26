@@ -145,6 +145,26 @@ RFS_ADMIN_PASSWORD_HASH=\$2b\$12\$...
 ```
 ⚠️ Important: Always enclose bcrypt hashes in double quotes in .env files to avoid truncation caused by $ symbol expansion.  ( in some cases single quotes works better )
 
+
+## Portable Static Build (Linux)
+
+To create a fully self-contained binary that runs on any 64-bit Linux distribution (including Alpine Linux) without external `glibc` dependencies, compile it statically using `musl`:
+
+1. Add the musl target
+```bash
+rustup target add x86_64-unknown-linux-musl
+```
+
+2. Build the static release binary
+```bash
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+3. (Optional) Strip debug symbols to reduce binary size
+```bash
+strip target/x86_64-unknown-linux-musl/release/rust-file-server
+```
+
 ## License
 
 GNU General Public License v3.0
