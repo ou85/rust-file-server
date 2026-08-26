@@ -316,10 +316,7 @@ async fn upload_files(
             //     filename,
             //     total_bytes as f64 / 1024.0 / 1024.0
             // );
-            print!(
-                "\rUploading {:.2} MB",
-                total_bytes as f64 / 1024.0 / 1024.0
-            );
+            print!("\rUploading {:.2} MB", total_bytes as f64 / 1024.0 / 1024.0);
             std::io::stdout().flush().unwrap();
 
             // Accumulated a full chunk — encrypt and write
@@ -368,17 +365,24 @@ async fn upload_files(
                 .as_secs(),
         };
 
-        app.metadata.save_file(&metadata).map_err(|e| {
-            (
+        // Save metadata. If it fails, delete the .tmp file (rollback).
+        if let Err(e) = app.metadata.save_file(&metadata) {
+            app.storage.cleanup_tmp_file(&id);
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("DB error: {}", e),
-            )
-        })?;
+            ));
+        }
 
-        println!(
-            "\nUploaded  {:.2} MB",
-            total_bytes as f64 / 1024.0 / 1024.0
-        );
+        // Metadata saved successfully, renaming .tmp to the final file
+        if let Err(e) = app.storage.finalize_file(&id) {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Finalize error: {}", e),
+            ));
+        }
+
+        println!("\nUploaded  {:.2} MB", total_bytes as f64 / 1024.0 / 1024.0);
 
         uploaded.push(metadata);
     }
@@ -390,7 +394,14 @@ async fn upload_files(
     Ok(Json(uploaded))
 }
 
-async fn logout() -> impl IntoResponse {
+async fn logout(State(app): State<Arc<App>>) -> impl IntoResponse {
+    // Cleaning up temporary files older than 4 hours
+    match app.storage.cleanup_stale_tmp_files(4 * 3600) {
+        Ok(count) if count > 0 => println!("=== Logout cleanup: removed {} stale tmp files", count),
+        Ok(_) => {}
+        Err(e) => eprintln!("=== Logout cleanup error: {}", e),
+    }
+
     (
         StatusCode::OK,
         [(
@@ -399,19 +410,6 @@ async fn logout() -> impl IntoResponse {
         )],
     )
 }
-
-// ----------------
-// Logout on tab close or reload
-// async fn logout() -> impl IntoResponse {
-//     (
-//         StatusCode::OK,
-//         [(
-//             header::SET_COOKIE,
-//             "rfs_role=; Path=/; Max-Age=0; HttpOnly".to_string(),
-//         )],
-//     )
-// }
-// ----------------
 
 fn require_auth(jar: &CookieJar) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     match jar.get("rfs_role") {

@@ -166,8 +166,69 @@ impl Storage {
     }
 
     pub fn create_file_writer(&self, id: &str) -> io::Result<std::fs::File> {
-        let path = self.file_path(id);
+        let path = self.file_path(&format!("{}.tmp", id));
         Ok(std::fs::File::create(path)?)
+    }
+
+    /// Renames the temporary file to the final file after successful writing and saving of metadata.
+    pub fn finalize_file(&self, id: &str) -> io::Result<()> {
+        let tmp_path = self.file_path(&format!("{}.tmp", id));
+        let final_path = self.file_path(id);
+        fs::rename(tmp_path, final_path)?;
+        Ok(())
+    }
+
+    /// Deletes the .tmp file in case of an error (rollback).
+    pub fn cleanup_tmp_file(&self, id: &str) {
+        let tmp_path = self.file_path(&format!("{}.tmp", id));
+        let _ = fs::remove_file(tmp_path);
+    }
+
+    /// Deletes ALL .tmp files (called at server startup).
+    pub fn cleanup_all_tmp_files(&self) -> io::Result<usize> {
+        let mut removed = 0;
+
+        for entry in fs::read_dir(&self.root_path)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            if name.ends_with(".tmp") {
+                if fs::remove_file(entry.path()).is_ok() {
+                    removed += 1;
+                    println!("=== Removed orphaned tmp file: {}", name);
+                }
+            }
+        }
+
+        Ok(removed)
+    }
+
+    /// Deletes .tmp files older than max_age seconds.
+    pub fn cleanup_stale_tmp_files(&self, max_age_secs: u64) -> io::Result<usize> {
+        let mut removed = 0;
+        let max_age = std::time::Duration::from_secs(max_age_secs);
+
+        for entry in fs::read_dir(&self.root_path)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            if name.ends_with(".tmp") {
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        if let Ok(elapsed) = modified.elapsed() {
+                            if elapsed > max_age {
+                                if fs::remove_file(entry.path()).is_ok() {
+                                    removed += 1;
+                                    println!("=== Removed stale tmp file: {}", name);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(removed)
     }
 }
 

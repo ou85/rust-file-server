@@ -33,6 +33,12 @@ impl App {
         let metadata = MetadataStore::new(&config)?;
         let crypto = Crypto::new(&config.encryption_key);
 
+        match storage.cleanup_all_tmp_files() {
+            Ok(count) if count > 0 => println!("=== Cleaned up {} orphaned tmp files", count),
+            Ok(_) => {}
+            Err(e) => eprintln!("=== Cleanup error: {}", e),
+        }
+
         Ok(Self {
             config,
             storage,
