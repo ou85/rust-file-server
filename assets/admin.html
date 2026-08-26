@@ -58,14 +58,14 @@
     </head>
     <body>
         <div class="top-bar">
-            <h1>Admin Panel</h1>
+            <h1>Administrator Control Panel</h1>
             <button type="submit" onclick="logout()" class="logout-button">⏻</button>
         </div>
-        <h4>One day it should be done... but not today.</h4>
+        <h4>User Management</h4>
         <div class="add-card">
         <button type="submit" onclick="add_user()" class="add-button">Add user</button>
         </div>
-        <table id="files">
+        <table id="users">
             <thead>
                 <tr><th>Name</th><th>Role</th><th>Status</th><th class="actions">Actions</th></tr>
             </thead>
@@ -76,7 +76,7 @@
                         <button type="submit" onclick="deleteFile('${f.id}')">Delete</button>
                     </td>
                 </tr>
-                <tr><td>user</td><td>User</td><td>active</td>
+                <tr><td>user</td><td>User</td><td style="color:#5f6368">inactive</td>
                     <td class="actions">
                         <button type="submit" onclick="openFile('${f.id}')">Edit</button>
                         <button type="submit" onclick="deleteFile('${f.id}')">Delete</button>
