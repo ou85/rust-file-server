@@ -156,14 +156,24 @@ rustup target add x86_64-unknown-linux-musl
 ```
 
 2. Build the static release binary
+- for x86-64
+
 ```bash
 cargo build --release --target x86_64-unknown-linux-musl
 ```
 
-3. (Optional) Strip debug symbols to reduce binary size
+(Optional) Strip debug symbols to reduce binary size
+
 ```bash
 strip target/x86_64-unknown-linux-musl/release/rust-file-server
 ```
+
+- for aarch64
+
+```bash
+cargo zigbuild --release --target aarch64-unknown-linux-musl
+```
+
 
 ## License
 
