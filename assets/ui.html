@@ -251,8 +251,9 @@
         .image-modal-content { position: relative; width: min(92vw, 76rem); height: min(88vh, 52rem); display: flex; align-items: center; justify-content: center; }
         .image-modal img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; }
         .image-modal-toolbar { position: absolute; top: 0; left: 0; display: flex; gap: .5rem; }
-        .image-modal-button { display: inline-flex; align-items: center; justify-content: center; min-width: 2.5rem; height: 2.25rem; padding: 0 .75rem; border: 1px solid rgba(255,255,255,.9); border-radius: .5rem; background: transparent; color: #fff; font: inherit; font-size: 1.2rem; font-weight: 700; line-height: 1; cursor: pointer; }
-        .image-modal-button:hover { background: rgba(255,255,255,.14); border-color: #fff; }
+        .image-modal-button { display: inline-flex; align-items: center; justify-content: center; min-width: 2.5rem; height: 2.25rem; padding: 0 .75rem; border: 1px solid rgba(255,255,255,.28); border-radius: .5rem; background: transparent; color: #fff; font: inherit; font-size: 1.2rem; font-weight: 700; line-height: 1; cursor: pointer; }
+        .image-modal-button:hover { background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.55); }
+        .image-modal-button img { width: 1.25rem; height: 1.25rem; object-fit: contain; pointer-events: none; }
         .image-modal-delete:hover { color: #ff8585; border-color: #ff8585; background: rgba(227,75,75,.18); }
         .image-modal-close { position: absolute; top: 0; right: 0; width: 2.5rem; min-width: 0; padding: 0; font-size: 1.5rem; line-height: 1; }
         .image-modal-nav { position: fixed; top: 50%; width: 4rem; height: 7rem; transform: translateY(-50%); border: 0; background: transparent; cursor: pointer; }
@@ -270,7 +271,7 @@
 <body>
     <main class="page-shell">
     <header class="top-bar">
-        <div class="brand"><h1>RSFS</h1><p>Local Encrypted Storage client</p></div>
+        <div class="brand"><h1>RSFS</h1><p>Local Encrypted Storage</p></div>
         <button type="submit" onclick="logout()" class="logout-button">⏻</button>
     </header>
     <section class="status-card" aria-label="Server status">
@@ -323,10 +324,10 @@
         <button type="button" class="image-modal-nav image-modal-prev" onclick="navigateImage(-1)" aria-label="Previous image"></button>
         <div class="image-modal-content">
             <div class="image-modal-toolbar">
-                <button type="button" class="image-modal-button" onclick="downloadCurrentImage()" aria-label="Download" title="Download">↓</button>
-                <button type="button" class="image-modal-button image-modal-delete" onclick="deleteCurrentImage()" aria-label="Delete" title="Delete">🗑</button>
+                <button type="button" class="image-modal-button" onclick="downloadCurrentImage()" aria-label="Download" title="Download"><img src="/assets/icons/download.png" alt=""></button>
+                <button type="button" class="image-modal-button image-modal-delete" onclick="deleteCurrentImage()" aria-label="Delete" title="Delete"><img src="/assets/icons/delete.png" alt=""></button>
             </div>
-            <button type="button" class="image-modal-button image-modal-close" onclick="closeImageModal()" aria-label="Close image preview">×</button>
+            <button type="button" class="image-modal-button image-modal-close" onclick="closeImageModal()" aria-label="Close image preview"><img src="/assets/icons/cancel.png" alt=""></button>
             <img id="imageModalImage" alt="">
             <div class="image-modal-caption" id="imageModalCaption"></div>
         </div>

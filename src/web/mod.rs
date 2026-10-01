@@ -32,6 +32,7 @@ pub fn create_router(state: Arc<App>) -> Router {
         .route("/logout", post(logout))
         .route("/health", get(health))
         .route("/storage", get(storage_stats))
+        .route("/assets/icons/{name}", get(icon))
         .route("/files", get(list_files).delete(delete_files))
         .route("/files/{id}", get(get_file))
         .route("/files/upload", post(upload_files))
@@ -45,6 +46,26 @@ pub fn create_router(state: Arc<App>) -> Router {
 
 async fn health() -> &'static str {
     "OK"
+}
+
+async fn icon(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    require_user(&jar, &app)?;
+    let bytes = match name.as_str() {
+        "cancel.png" => include_bytes!("../../assets/icons/cancel.png").as_slice(),
+        "delete.png" => include_bytes!("../../assets/icons/delete.png").as_slice(),
+        "download.png" => include_bytes!("../../assets/icons/download.png").as_slice(),
+        _ => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Icon not found"})),
+            ));
+        }
+    };
+    Ok(([(header::CONTENT_TYPE, "image/png")], bytes))
 }
 
 async fn storage_stats(
