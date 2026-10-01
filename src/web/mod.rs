@@ -55,6 +55,7 @@ pub fn create_router(state: Arc<App>) -> Router {
         .layer(DefaultBodyLimit::disable())
         .route("/files/{id}", delete(delete_file))
         .route("/files/{id}/open", get(open_file))
+        .route("/files/{id}/player", get(video_player))
         .route("/files/{id}/stream", get(stream_file))
         .route("/files/{id}/download", get(download_file))
         .with_state(state)
@@ -410,6 +411,74 @@ async fn open_file(
     };
 
     Ok(Redirect::to(&format!("/files/{}/stream", metadata.id)).into_response())
+}
+
+async fn video_player(
+    jar: CookieJar,
+    Path(id): Path<String>,
+    State(app): State<Arc<App>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    require_user(&jar, &app)?;
+    let metadata = match app.get_file(&id) {
+        Ok(Some(metadata)) => metadata,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "File not found", "id": id})),
+            ));
+        }
+        Err(error) => {
+            tracing::error!("video player metadata lookup failed: {error}");
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Could not load video metadata"})),
+            ));
+        }
+    };
+    let mime = blob_store::guess_mime(&metadata.filename);
+    if !mime.starts_with("video/") {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Video file not found", "id": id})),
+        ));
+    }
+
+    let title = escape_html(&metadata.filename);
+    let stream_url = format!("/files/{}/stream", percent_encode_filename(&id));
+    let page = format!(
+        r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} · RSFS</title>
+<style>
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; min-height: 100vh; display: grid; grid-template-rows: auto 1fr; background: #171715; color: #f7f7f5; font: 15px system-ui, sans-serif; }}
+header {{ padding: 14px 20px; border-bottom: 1px solid #3b3b38; overflow-wrap: anywhere; }}
+main {{ min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 20px; }}
+video {{ display: block; width: min(100%, 1200px); max-height: calc(100vh - 130px); background: #000; }}
+</style></head><body><header>{title}</header><main>
+<video controls autoplay preload="metadata" playsinline><source src="{stream_url}" type="{mime}">This browser cannot play this video format.</video>
+</main></body></html>"#,
+    );
+    let mut response = Html(page).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        "default-src 'none'; style-src 'unsafe-inline'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+            .parse()
+            .unwrap(),
+    );
+    response
+        .headers_mut()
+        .insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
+    Ok(response)
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 async fn upload_files(
@@ -915,6 +984,47 @@ mod tests {
         assert_eq!(result["per_page"], 10);
         assert_eq!(result["files"].as_array().unwrap().len(), 10);
         assert_eq!(result["files"][0]["filename"], "item-10.txt");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn video_player_uses_native_controls_and_escapes_filename() {
+        let (app, dir) = test_app();
+        app.metadata
+            .save_file(&FileMetadata {
+                id: "video-id".into(),
+                filename: "movie<demo>.mp4".into(),
+                size: 123,
+                created_at: 1,
+            })
+            .unwrap();
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/files/video-id/player")
+                    .header("cookie", user_cookie(&app))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response
+                .headers()
+                .contains_key(header::CONTENT_SECURITY_POLICY)
+        );
+        let page = String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(page.contains("movie&lt;demo&gt;.mp4"));
+        assert!(page.contains("<video controls autoplay preload=\"metadata\" playsinline>"));
+        assert!(page.contains("/files/video-id/stream"));
+        assert!(!page.contains("Playback not supported?"));
         fs::remove_dir_all(dir).unwrap();
     }
 

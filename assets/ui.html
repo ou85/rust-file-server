@@ -568,6 +568,10 @@
             return /\.(png|jpe?g|gif|webp|avif|bmp)$/.test(filename.toLowerCase());
         }
 
+        function isVideoFile(filename) {
+            return /\.(mp4|webm|mov|m4v|mkv|avi|ogv|mpeg|mpg|3gp)$/.test(filename.toLowerCase());
+        }
+
         function showImageModal(id) {
             imagePreviewFiles = allFiles.filter(file => isRasterImage(file.filename));
             imagePreviewIndex = imagePreviewFiles.findIndex(file => file.id === id);
@@ -637,13 +641,15 @@
                 showImageModal(id);
                 return;
             }
-            const url = '/files/' + id + '/open';
-            const exists = await checkFileExists(id, url);
+            const openUrl = isVideoFile(file?.filename)
+                ? '/files/' + encodeURIComponent(id) + '/player'
+                : '/files/' + encodeURIComponent(id) + '/open';
+            const exists = await checkFileExists(id, openUrl);
             if (!exists) {
                 showConfirmModal('File not found. Delete the entry?', () => deleteFile(id, true));
                 return;
             }
-            window.open(url, '_blank');
+            window.open(openUrl, '_blank');
         }
 
         async function downloadFile(id) {
