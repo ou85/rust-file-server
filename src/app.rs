@@ -62,8 +62,23 @@ impl App {
         })
     }
 
-    pub fn print_banner(addr: &str, data_dir: &Path) {
-        tracing::info!(version = env!("CARGO_PKG_VERSION"), data_dir = %data_dir.display(), address = %addr, "Server online");
+    pub fn print_banner(addr: &str, database_path: &Path) -> std::io::Result<()> {
+        use std::io::{IsTerminal, Write};
+
+        let stdout = std::io::stdout();
+        let (blue, reset) = if stdout.is_terminal() {
+            ("\x1b[36m", "\x1b[0m")
+        } else {
+            ("", "")
+        };
+        let mut output = stdout.lock();
+        writeln!(output, "──────────────────────────────")?;
+        writeln!(output, "rust-file-server v{}", env!("CARGO_PKG_VERSION"))?;
+        writeln!(output, "──────────────────────────────")?;
+        writeln!(output, "✓ Database:  {}", database_path.display())?;
+        writeln!(output)?;
+        writeln!(output, "→ Server online")?;
+        writeln!(output, "→ Listening on {blue}http://{addr}{reset}")
     }
 
     pub fn import_file(&self, path: &str) -> Result<FileMetadata, Box<dyn std::error::Error>> {

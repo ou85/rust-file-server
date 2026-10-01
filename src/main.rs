@@ -57,7 +57,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let router = create_router(state.clone());
             let addr = state.config.bind_address.clone();
             let listener = tokio::net::TcpListener::bind(&addr).await?;
-            app::App::print_banner(&addr, &state.config.data_dir);
+            app::App::print_banner(&addr, &state.config.metadata_path)?;
             axum::serve(listener, router).await?;
         }
     }
