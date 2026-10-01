@@ -33,7 +33,7 @@ impl App {
             config.tmp_dir.clone(),
         )?);
         let metadata = MetadataStore::new(&config)?;
-        let crypto = Crypto::new(&config.encryption_key);
+        let crypto = Crypto::new(&config.encryption_key)?;
 
         match storage.cleanup_all_tmp_files() {
             Ok(count) if count > 0 => println!("=== Cleaned up {} orphaned tmp files", count),

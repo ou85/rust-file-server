@@ -289,9 +289,13 @@ async fn upload_files(
             )
         })?;
 
-        // Format header: [4 bytes chunk_size]
-        let chunk_size_header = (CHUNK_SIZE as u32).to_le_bytes();
-        file.write_all(&chunk_size_header).map_err(|e| {
+        let mut encryptor = app.crypto.start_encryption(&id).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Encrypt error: {e}"),
+            )
+        })?;
+        file.write_all(encryptor.header()).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("IO error: {}", e),
@@ -324,27 +328,27 @@ async fn upload_files(
                 let chunk = buffer[..CHUNK_SIZE].to_vec();
                 buffer.drain(..CHUNK_SIZE);
 
-                app.crypto
-                    .encrypt_chunked_to_writer(std::iter::once(Ok(chunk)), &mut file)
-                    .map_err(|e| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Encrypt error: {}", e),
-                        )
-                    })?;
+                let encrypted = encryptor.encrypt_chunk(&chunk).map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Encrypt error: {e}"),
+                    )
+                })?;
+                file.write_all(&encrypted)
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("IO error: {e}")))?;
             }
         }
 
         // Last incomplete chunk
         if !buffer.is_empty() {
-            app.crypto
-                .encrypt_chunked_to_writer(std::iter::once(Ok(buffer)), &mut file)
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Encrypt error: {}", e),
-                    )
-                })?;
+            let encrypted = encryptor.encrypt_chunk(&buffer).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Encrypt error: {e}"),
+                )
+            })?;
+            file.write_all(&encrypted)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("IO error: {e}")))?;
         }
 
         file.flush().map_err(|e| {

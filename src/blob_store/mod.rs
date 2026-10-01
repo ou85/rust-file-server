@@ -1,4 +1,5 @@
 use crate::{crypto::Crypto, domain::StoredFile};
+use aes_gcm::{Nonce, aead::Aead};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -10,7 +11,7 @@ pub struct RangeChunkIterator {
     data: Vec<u8>,
     offset: usize,
     frame_size: usize,
-    crypto: Crypto,
+    cipher: aes_gcm::Aes256Gcm,
     current_chunk: usize,
     last_chunk: usize,
     skip_bytes: usize,
@@ -38,7 +39,10 @@ impl Iterator for RangeChunkIterator {
         let nonce_bytes: [u8; 12] = frame[..12].try_into().unwrap();
         let ciphertext = &frame[12..];
 
-        let plain = match self.crypto.decrypt(&nonce_bytes, ciphertext) {
+        let plain = match self.cipher.decrypt(
+            &Nonce::try_from(nonce_bytes.as_slice()).unwrap(),
+            ciphertext,
+        ) {
             Ok(p) => p,
             Err(_) => {
                 return Some(Err(io::Error::new(
@@ -88,7 +92,7 @@ impl Storage {
     /// Saves the file in chunks - each chunk is encrypted separately
     pub fn save_file(&self, file: &StoredFile, crypto: &Crypto) -> io::Result<String> {
         let path = self.file_path(&file.id);
-        let encrypted = crypto.encrypt_chunked(&file.content);
+        let encrypted = crypto.encrypt_chunked(&file.id, &file.content)?;
         fs::write(path, encrypted)?;
         Ok(file.id.clone())
     }
@@ -98,17 +102,13 @@ impl Storage {
         let path = self.file_path(id);
         let data = fs::read(path)?;
 
-        if data.len() < 4 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "file too small"));
-        }
-
-        let chunk_size = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
+        let (offset, chunk_size, cipher) = crypto.parse_cipher(id, &data)?;
 
         Ok(ChunkIterator {
             data,
-            offset: 4,
+            offset,
             chunk_size,
-            crypto: crypto.clone(),
+            cipher,
         })
     }
 
@@ -150,11 +150,7 @@ impl Storage {
         let path = self.file_path(id);
         let data = fs::read(path)?;
 
-        if data.len() < 4 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "file too small"));
-        }
-
-        let chunk_size = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
+        let (header_len, chunk_size, cipher) = crypto.parse_cipher(id, &data)?;
         let frame_size = 12 + chunk_size + 16; // nonce + ciphertext + GCM tag
 
         let first_chunk = byte_start as usize / chunk_size;
@@ -163,13 +159,13 @@ impl Storage {
         let remaining = (byte_end - byte_start + 1) as usize;
 
         // Fast-forward directly to the required chunk, skipping the previous ones
-        let offset = 4 + first_chunk * frame_size;
+        let offset = header_len + first_chunk * frame_size;
 
         Ok(RangeChunkIterator {
             data,
             offset,
             frame_size,
-            crypto: crypto.clone(),
+            cipher,
             current_chunk: first_chunk,
             last_chunk,
             skip_bytes,
@@ -250,7 +246,7 @@ pub struct ChunkIterator {
     data: Vec<u8>,
     offset: usize,
     chunk_size: usize,
-    crypto: Crypto,
+    cipher: aes_gcm::Aes256Gcm,
 }
 
 impl<'a> Iterator for ChunkIterator {
@@ -278,7 +274,10 @@ impl<'a> Iterator for ChunkIterator {
         let nonce_bytes: [u8; 12] = frame[..12].try_into().unwrap();
         let ciphertext = &frame[12..];
 
-        match self.crypto.decrypt(&nonce_bytes, ciphertext) {
+        match self.cipher.decrypt(
+            &Nonce::try_from(nonce_bytes.as_slice()).unwrap(),
+            ciphertext,
+        ) {
             Ok(plain) => {
                 self.offset += frame.len();
                 Some(Ok(plain))
