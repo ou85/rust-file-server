@@ -359,6 +359,7 @@
     <script>
         let allFiles = [];
         const selectedIds = new Set();
+        let downloadingSelection = false;
         let currentPage = 1;
         let pageSize = 20;
         let totalPages = 1;
@@ -482,14 +483,39 @@
             renderFiles();
         }
 
-        function downloadSelected() {
-            [...selectedIds].forEach((id, index) => {
-                window.setTimeout(() => {
+        async function downloadSelected() {
+            if (downloadingSelection || selectedIds.size === 0) return;
+            downloadingSelection = true;
+            const button = document.querySelector('.selection-download');
+            button.disabled = true;
+            const ids = [...selectedIds];
+            let failed = 0;
+            try {
+                for (const [index, id] of ids.entries()) {
+                    if (index > 0) await new Promise(resolve => window.setTimeout(resolve, 150));
+                    const url = `/files/${encodeURIComponent(id)}/download`;
+                    if (!await checkFileExists(id, url)) {
+                        failed++;
+                        continue;
+                    }
                     const link = document.createElement('a');
-                    link.href = `/files/${encodeURIComponent(id)}/download`;
-                    link.download = ''; link.hidden = true; document.body.appendChild(link); link.click(); link.remove();
-                }, index * 150);
-            });
+                    link.href = url;
+                    link.download = ''; link.hidden = true;
+                    document.body.appendChild(link);
+                    try {
+                        link.click();
+                    } finally {
+                        link.remove();
+                    }
+                    // Native downloads do not expose completion; clear only files handed to the browser.
+                    selectedIds.delete(id);
+                    renderFiles();
+                }
+                if (failed > 0) alert(`Could not start downloading ${failed} ${failed === 1 ? 'file' : 'files'}. They remain selected.`);
+            } finally {
+                downloadingSelection = false;
+                button.disabled = false;
+            }
         }
 
         document.getElementById('fileSearch').addEventListener('input', () => { currentPage = 1; load(); });
