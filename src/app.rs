@@ -1,4 +1,5 @@
 use crate::{
+    auth::SessionStore,
     blob_store::{ChunkIterator, RangeChunkIterator, Storage},
     config::Config,
     crypto::Crypto,
@@ -20,6 +21,7 @@ pub struct App {
     pub storage: Arc<Storage>,
     pub metadata: MetadataStore,
     pub crypto: Crypto,
+    pub sessions: SessionStore,
 }
 
 impl App {
@@ -56,6 +58,7 @@ impl App {
             storage,
             metadata,
             crypto,
+            sessions: SessionStore::new(),
         })
     }
 

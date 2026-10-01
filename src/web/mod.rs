@@ -39,15 +39,14 @@ async fn health() -> &'static str {
     "OK"
 }
 
-pub async fn root(jar: CookieJar) -> impl IntoResponse {
-    match jar.get("rfs_role") {
-        Some(cookie) if cookie.value() == "user" => {
-            Html(include_str!("../../assets/ui.html")).into_response()
-        }
+pub async fn root(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoResponse {
+    match jar
+        .get("rfs_session")
+        .and_then(|cookie| app.sessions.role(cookie.value()))
+    {
+        Some(UserRole::User) => Html(include_str!("../../assets/ui.html")).into_response(),
 
-        Some(cookie) if cookie.value() == "admin" => {
-            Html(include_str!("../../assets/admin.html")).into_response()
-        }
+        Some(UserRole::Admin) => Html(include_str!("../../assets/admin.html")).into_response(),
 
         _ => Redirect::to("/login").into_response(),
     }
@@ -61,16 +60,13 @@ async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> im
     match authenticate(&req.username, &req.password, &app.config) {
         Some(role) => {
             println!("\n=== Login success");
-            let value = match role {
-                UserRole::User => "user",
-                UserRole::Admin => "admin",
-            };
+            let token = app.sessions.create(role);
 
             (
                 StatusCode::OK,
                 [(
                     header::SET_COOKIE,
-                    format!("rfs_role={}; Path=/; HttpOnly", value),
+                    format!("rfs_session={token}; Path=/; HttpOnly; SameSite=Strict"),
                 )],
             )
         }
@@ -90,7 +86,7 @@ async fn list_files(
     jar: CookieJar,
     State(app): State<Arc<App>>,
 ) -> Result<Json<Vec<FileMetadata>>, (StatusCode, Json<serde_json::Value>)> {
-    if let Err(e) = require_user(&jar) {
+    if let Err(e) = require_user(&jar, &app) {
         return Err(e);
     }
 
@@ -111,7 +107,7 @@ async fn get_file(
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> Result<Json<Option<FileMetadata>>, (StatusCode, Json<serde_json::Value>)> {
-    if let Err(e) = require_user(&jar) {
+    if let Err(e) = require_user(&jar, &app) {
         return Err(e);
     }
     Ok(Json(app.get_file(&id).unwrap()))
@@ -122,7 +118,7 @@ async fn delete_file(
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    if let Err(e) = require_user(&jar) {
+    if let Err(e) = require_user(&jar, &app) {
         return e;
     }
     match app.delete_file(&id) {
@@ -167,7 +163,7 @@ async fn download_file(
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> Result<(StatusCode, [(String, String); 2], Body), (StatusCode, Json<serde_json::Value>)> {
-    if let Err(e) = require_user(&jar) {
+    if let Err(e) = require_user(&jar, &app) {
         return Err(e);
     }
 
@@ -215,7 +211,7 @@ async fn open_file(
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    if let Err(e) = require_user(&jar) {
+    if let Err(e) = require_user(&jar, &app) {
         return Err(e);
     }
 
@@ -237,7 +233,7 @@ async fn upload_files(
     State(app): State<Arc<App>>,
     mut multipart: Multipart,
 ) -> Result<Json<Vec<FileMetadata>>, (StatusCode, String)> {
-    if let Err((code, json)) = require_auth(&jar) {
+    if let Err((code, json)) = require_user(&jar, &app) {
         return Err((code, json.to_string()));
     }
 
@@ -375,7 +371,10 @@ async fn upload_files(
     Ok(Json(uploaded))
 }
 
-async fn logout(State(app): State<Arc<App>>) -> impl IntoResponse {
+async fn logout(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoResponse {
+    if let Some(cookie) = jar.get("rfs_session") {
+        app.sessions.remove(cookie.value());
+    }
     // Cleaning up temporary files older than 4 hours
     match app.storage.cleanup_stale_tmp_files(4 * 3600) {
         Ok(count) if count > 0 => println!("=== Logout cleanup: removed {} stale tmp files", count),
@@ -387,24 +386,17 @@ async fn logout(State(app): State<Arc<App>>) -> impl IntoResponse {
         StatusCode::OK,
         [(
             header::SET_COOKIE,
-            "rfs_role=; Path=/; Max-Age=0; HttpOnly".to_string(),
+            "rfs_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict".to_string(),
         )],
     )
 }
 
-fn require_auth(jar: &CookieJar) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    match jar.get("rfs_role") {
-        Some(cookie) if cookie.value() == "user" || cookie.value() == "admin" => Ok(()),
-        _ => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Unauthorized" })),
-        )),
-    }
-}
-
-fn require_user(jar: &CookieJar) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    match jar.get("rfs_role") {
-        Some(cookie) if cookie.value() == "user" => Ok(()),
+fn require_user(jar: &CookieJar, app: &App) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    match jar
+        .get("rfs_session")
+        .and_then(|cookie| app.sessions.role(cookie.value()))
+    {
+        Some(UserRole::User) => Ok(()),
         _ => Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": "Access denied" })),
@@ -418,7 +410,7 @@ async fn stream_file(
     State(app): State<Arc<App>>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    if let Err(e) = require_auth(&jar) {
+    if let Err(e) = require_user(&jar, &app) {
         return Err(e);
     }
 
