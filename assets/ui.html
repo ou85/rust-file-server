@@ -18,10 +18,8 @@
             height: 4rem;
             width: 4rem;
             border: 1px solid #00afa9;
-            /* border: 1px solid #1dc204; */
             border-radius: 2rem;
             color:#00afa9;
-            /* color:#1dc204; */
             font-size: 1.5rem;
             cursor: pointer;
             margin-bottom: -1rem;
@@ -87,8 +85,6 @@
         td button:nth-child(1) { background: #e8f0fe; color: #1a73e8; border: 1px solid #e8f0fe}
         td button:nth-child(2) { background: #f1f3f4; color: #202124; border: 1px solid #f1f3f4}
         td button:nth-child(3) { background: #fce8e6; color: #d93025; border: 1px solid #fce8e6}
-        /* td button:hover { opacity: 0.9; border: 1px solid blueviolet }
-        td button:active { opacity: 0.5; border:1px solid rgb(95, 18, 18) } */
         td button:hover { 
             filter: brightness(0.85);
             border: 1px solid blueviolet
@@ -210,6 +206,12 @@
         .queue-remove { flex: none; height: 32px; padding: 0 10px; }
         .queue-upload { width: 100%; height: 38px; margin-top: 12px; border: 1px solid #348b50; border-radius: 8px; background: #43a563; color: #fff; font-weight: 600; cursor: pointer; }
         .queue-upload:hover { background: #378f54; }
+        .file-toolbar { display: flex; gap: 12px; margin-top: 96px; }
+        .file-search, .file-sort { height: 38px; border: 1px solid #c8c8c8; border-radius: 8px; background: #fff; color: #222; font: inherit; font-size: 14px; }
+        .file-search { min-width: 0; flex: 1; padding: 0 12px; }
+        .file-search::placeholder { color: #777; }
+        .file-search:focus-visible, .file-sort:focus-visible { outline: 2px solid #75c995; outline-offset: 1px; }
+        .file-sort { width: 180px; padding: 0 10px; }
         table { margin-top: 22px; border: 0; border-radius: 0; box-shadow: none; }
         th, td { padding: 14px 10px; border-bottom: 1px solid #e5e5e2; }
         th { background: transparent; color: #858585; font-size: 13px; font-weight: 400; }
@@ -217,7 +219,7 @@
         td:first-child { font-weight: 600; }
         td button { height: 34px; min-width: 0; margin: 0 0 0 5px; padding: 6px 11px; border: 1px solid #d0d0d0; border-radius: 8px; background: #fff; color: #222; }
         td button:hover { filter: none; border-color: #b9b9b5; background: #f0f0f0; }
-        @media (max-width: 620px) { body { padding: 20px 16px 36px; } .status-card, .files-card { padding: 18px; } th, td { padding-left: 6px; padding-right: 6px; } td button { padding: 6px 8px; } }
+        @media (max-width: 620px) { body { padding: 20px 16px 36px; } .status-card, .files-card { padding: 18px; } .file-toolbar { gap: 8px; margin-top: 64px; } .file-sort { width: 150px; } th, td { padding-left: 6px; padding-right: 6px; } td button { padding: 6px 8px; } }
     </style>
 </head>
 <body>
@@ -251,13 +253,43 @@
         <div class="progress-bar" id="progressBar"></div>
     </div>
     <div class="progress-text" id="progressText"></div>
+    <div class="file-toolbar">
+        <input class="file-search" id="fileSearch" type="search" placeholder="Search files" aria-label="Search files">
+        <select class="file-sort" id="fileSort" aria-label="Sort files">
+            <option value="recent">Recently updated</option>
+            <option value="name-asc">Name A-Z</option>
+            <option value="name-desc">Name Z-A</option>
+            <option value="size-desc">Largest first</option>
+            <option value="size-asc">Smallest first</option>
+            <option value="oldest">Oldest uploaded</option>
+        </select>
+    </div>
     <table id="files"></table>
     </section>
     </main>
     <script>
+        let allFiles = [];
+
         async function load() {
             const res = await fetch('/files');
-            const files = await res.json();
+            allFiles = await res.json();
+            renderFiles();
+        }
+
+        function renderFiles() {
+            const query = document.getElementById('fileSearch').value.trim().toLocaleLowerCase();
+            const sort = document.getElementById('fileSort').value;
+            const files = allFiles.filter(file => file.filename.toLocaleLowerCase().includes(query));
+            files.sort((left, right) => {
+                switch (sort) {
+                    case 'name-asc': return left.filename.localeCompare(right.filename);
+                    case 'name-desc': return right.filename.localeCompare(left.filename);
+                    case 'size-desc': return right.size - left.size;
+                    case 'size-asc': return left.size - right.size;
+                    case 'oldest': return left.created_at - right.created_at;
+                    default: return right.created_at - left.created_at;
+                }
+            });
             const table = document.getElementById('files');
             table.replaceChildren();
             const headerRow = document.createElement('tr');
@@ -280,6 +312,9 @@
                 row.appendChild(actions); table.appendChild(row);
             });
         }
+
+        document.getElementById('fileSearch').addEventListener('input', renderFiles);
+        document.getElementById('fileSort').addEventListener('change', renderFiles);
 
         function canOpen(filename) {
             const name = filename.toLowerCase();
