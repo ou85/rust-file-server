@@ -15,7 +15,22 @@ use tools::keygen;
 use web::create_router;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> std::process::ExitCode {
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .init();
+    match run().await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(error = %error, "Application failed");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let args: Vec<String> = std::env::args().collect();
 
@@ -29,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             keygen::run(32);
         }
         Some("hashgen") => {
-            hashgen::run(None);
+            hashgen::run(None)?;
         }
         Some("demo") => {
             let config = config::Config::from_args(&args[2..])?;

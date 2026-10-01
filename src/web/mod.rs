@@ -4,9 +4,13 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
+    extract::{
+        DefaultBodyLimit, Multipart, Path, Query, State,
+        multipart::MultipartRejection,
+        rejection::{JsonRejection, QueryRejection},
+    },
     http::{HeaderMap, StatusCode, header},
-    response::{Html, IntoResponse, Redirect},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{delete, get, post},
 };
 use axum_extra::extract::CookieJar;
@@ -16,6 +20,14 @@ use std::sync::Arc;
 use axum::body::Body;
 
 use serde_json::json;
+mod error;
+use axum::http::HeaderValue;
+use error::{ApiError, ApiResult};
+
+fn log_stream_error(error: std::io::Error) -> std::io::Error {
+    tracing::error!(error = %error, "File streaming failed");
+    error
+}
 
 #[derive(serde::Serialize)]
 struct StorageStats {
@@ -69,7 +81,7 @@ async fn icon(
     jar: CookieJar,
     State(app): State<Arc<App>>,
     Path(name): Path<String>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<impl IntoResponse> {
     require_user(&jar, &app)?;
     let (bytes, content_type) = match name.as_str() {
         "cancel.png" => (
@@ -109,10 +121,7 @@ async fn icon(
             "image/png",
         ),
         _ => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "Icon not found"})),
-            ));
+            return Err(ApiError::NotFound("Icon not found"));
         }
     };
     Ok(([(header::CONTENT_TYPE, content_type)], bytes))
@@ -121,34 +130,24 @@ async fn icon(
 async fn storage_stats(
     jar: CookieJar,
     State(app): State<Arc<App>>,
-) -> Result<Json<StorageStats>, (StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<Json<StorageStats>> {
     require_user(&jar, &app)?;
-    let path = std::ffi::CString::new(app.config.data_dir.as_os_str().as_encoded_bytes()).map_err(
-        |_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Invalid data directory"})),
-            )
-        },
-    )?;
+    let path = std::ffi::CString::new(app.config.data_dir.as_os_str().as_encoded_bytes())
+        .map_err(|error| ApiError::internal("Invalid data directory", error))?;
     let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     let result = unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) };
     if result != 0 {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": std::io::Error::last_os_error().to_string()})),
+        return Err(ApiError::internal(
+            "Read filesystem statistics",
+            std::io::Error::last_os_error(),
         ));
     }
     let stats = unsafe { stats.assume_init() };
     let block_size = stats.f_frsize as u64;
     let total_bytes = (stats.f_blocks as u64).saturating_mul(block_size);
     let available_bytes = (stats.f_bavail as u64).saturating_mul(block_size);
-    let used_bytes = directory_size(&app.config.data_dir).map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": format!("Could not measure data directory: {error}")})),
-        )
-    })?;
+    let used_bytes = directory_size(&app.config.data_dir)
+        .map_err(|error| ApiError::internal("Measure data directory", error))?;
     Ok(Json(StorageStats {
         used_bytes,
         total_bytes,
@@ -187,28 +186,36 @@ async fn login_page() -> Html<&'static str> {
     Html(include_str!("../../assets/login.html"))
 }
 
-async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> impl IntoResponse {
+async fn login(
+    State(app): State<Arc<App>>,
+    request: Result<Json<LoginRequest>, JsonRejection>,
+) -> ApiResult<Response> {
+    let Json(req) = request.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
     match authenticate(&req.username, &req.password, &app.config) {
         Some(role) => {
-            println!("\n=== Login success");
-            let token = app.sessions.create(role);
+            tracing::info!(?role, "Login succeeded");
+            let token = app
+                .sessions
+                .create(role)
+                .map_err(|error| ApiError::internal("Create session", error))?;
 
-            (
+            Ok((
                 StatusCode::OK,
                 [(
                     header::SET_COOKIE,
                     format!("rfs_session={token}; Path=/; HttpOnly; SameSite=Strict"),
                 )],
             )
+                .into_response())
         }
 
         None => {
-            println!("\n=== Login failed");
+            tracing::warn!("Login failed");
 
-            (
-                StatusCode::UNAUTHORIZED,
-                [(header::SET_COOKIE, "".to_string())],
-            )
+            Err(ApiError::Unauthorized)
         }
     }
 }
@@ -216,11 +223,13 @@ async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> im
 async fn list_files(
     jar: CookieJar,
     State(app): State<Arc<App>>,
-    Query(query): Query<FileListQuery>,
-) -> Result<Json<FileListResponse>, (StatusCode, Json<serde_json::Value>)> {
-    if let Err(e) = require_user(&jar, &app) {
-        return Err(e);
-    }
+    query: Result<Query<FileListQuery>, QueryRejection>,
+) -> ApiResult<Json<FileListResponse>> {
+    require_user(&jar, &app)?;
+    let Query(query) = query.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
 
     match app.list_files() {
         Ok(mut files) => {
@@ -255,13 +264,7 @@ async fn list_files(
                 per_page,
             }))
         }
-        Err(e) => {
-            tracing::error!("list_files failed: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            ))
-        }
+        Err(error) => Err(ApiError::internal("List files", error)),
     }
 }
 
@@ -269,125 +272,84 @@ async fn get_file(
     jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
-) -> Result<Json<Option<FileMetadata>>, (StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<Json<Option<FileMetadata>>> {
     if let Err(e) = require_user(&jar, &app) {
         return Err(e);
     }
-    Ok(Json(app.get_file(&id).unwrap()))
+    Ok(Json(app.get_file(&id).map_err(|error| {
+        ApiError::internal("Read file metadata", error)
+    })?))
 }
 
 async fn delete_file(
     jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    if let Err(e) = require_user(&jar, &app) {
-        return e;
-    }
-    match app.delete_file(&id) {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "deleted": true,
-                "id": id
-            })),
-        ),
-
-        Err(err) => {
-            // Check if the file was not found
-            let msg = err.to_string();
-
-            if msg.contains("not found") || msg.contains("No such file") {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({
-                        "deleted": false,
-                        "id": id,
-                        "error": "File not found"
-                    })),
-                );
-            }
-
-            // Any other error → 500
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "deleted": false,
-                    "id": id,
-                    "error": msg
-                })),
-            )
-        }
-    }
+) -> ApiResult<Json<serde_json::Value>> {
+    require_user(&jar, &app)?;
+    app.delete_file(&id)
+        .map_err(|error| ApiError::internal("Delete file", error))?;
+    tracing::info!(file_id = %id, "File deleted");
+    Ok(Json(json!({"deleted": true, "id": id})))
 }
 
 async fn delete_files(
     jar: CookieJar,
     State(app): State<Arc<App>>,
-    Json(request): Json<BulkDeleteRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    request: Result<Json<BulkDeleteRequest>, JsonRejection>,
+) -> ApiResult<Json<serde_json::Value>> {
     require_user(&jar, &app)?;
+    let Json(request) = request.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
     if request.ids.is_empty() || request.ids.len() > 1_000 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "Provide between 1 and 1000 file IDs" })),
+        return Err(ApiError::BadRequest(
+            "Provide between 1 and 1000 file IDs".into(),
         ));
     }
 
     let mut deleted = Vec::with_capacity(request.ids.len());
     for id in request.ids {
-        app.delete_file(&id).map_err(|error| {
-            tracing::error!("bulk delete failed for {id}: {error}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Could not delete selected files" })),
-            )
-        })?;
+        app.delete_file(&id)
+            .map_err(|error| ApiError::internal("Delete selected file", error))?;
         deleted.push(id);
     }
+    tracing::info!(count = deleted.len(), "Selected files deleted");
     Ok(Json(json!({ "deleted": deleted })))
+}
+
+fn lookup_file(app: &App, id: &str) -> ApiResult<FileMetadata> {
+    app.get_file(id)
+        .map_err(|error| ApiError::internal("Read file metadata", error))?
+        .ok_or(ApiError::NotFound("File not found"))
 }
 
 async fn download_file(
     jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<impl IntoResponse> {
     if let Err(e) = require_user(&jar, &app) {
         return Err(e);
     }
 
-    let metadata = match app.get_file(&id) {
-        Ok(Some(m)) => m,
-        _ => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "File not found", "id": id })),
-            ));
-        }
-    };
-
-    let chunks = app.export_chunked(&id).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string(), "id": id })),
-        )
-    })?;
+    let metadata = lookup_file(&app, &id)?;
+    let chunks = app
+        .export_chunked(&id)
+        .map_err(|error| ApiError::internal("Open file for download", error))?;
 
     // Get streams from chunks
     let stream = futures::stream::iter(chunks.map(|chunk| {
         chunk
             .map(|bytes| Bytes::from(bytes))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            .map_err(log_stream_error)
     }));
 
     let mime = blob_store::guess_mime(&metadata.filename);
 
-    let mut headers = secure_file_headers(&mime, &metadata.filename, false);
-    headers.insert(
-        header::CONTENT_LENGTH,
-        metadata.size.to_string().parse().unwrap(),
-    );
+    let mut headers = secure_file_headers(&mime, &metadata.filename, false)?;
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(metadata.size));
     Ok((StatusCode::OK, headers, Body::from_stream(stream)))
 }
 
@@ -395,20 +357,12 @@ async fn open_file(
     jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<impl IntoResponse> {
     if let Err(e) = require_user(&jar, &app) {
         return Err(e);
     }
 
-    let metadata = match app.get_file(&id) {
-        Ok(Some(m)) => m,
-        _ => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "File not found", "id": id })),
-            ));
-        }
-    };
+    let metadata = lookup_file(&app, &id)?;
 
     Ok(Redirect::to(&format!("/files/{}/stream", metadata.id)).into_response())
 }
@@ -417,30 +371,12 @@ async fn video_player(
     jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<impl IntoResponse> {
     require_user(&jar, &app)?;
-    let metadata = match app.get_file(&id) {
-        Ok(Some(metadata)) => metadata,
-        Ok(None) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "File not found", "id": id})),
-            ));
-        }
-        Err(error) => {
-            tracing::error!("video player metadata lookup failed: {error}");
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Could not load video metadata"})),
-            ));
-        }
-    };
+    let metadata = lookup_file(&app, &id)?;
     let mime = blob_store::guess_mime(&metadata.filename);
     if !mime.starts_with("video/") {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Video file not found", "id": id})),
-        ));
+        return Err(ApiError::NotFound("Video file not found"));
     }
 
     let title = escape_html(&metadata.filename);
@@ -462,13 +398,12 @@ video {{ display: block; width: min(100%, 1200px); max-height: calc(100vh - 130p
     let mut response = Html(page).into_response();
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
-        "default-src 'none'; style-src 'unsafe-inline'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-            .parse()
-            .unwrap(),
+        HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"),
     );
-    response
-        .headers_mut()
-        .insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     Ok(response)
 }
 
@@ -484,18 +419,20 @@ fn escape_html(value: &str) -> String {
 async fn upload_files(
     jar: CookieJar,
     State(app): State<Arc<App>>,
-    mut multipart: Multipart,
-) -> Result<Json<Vec<FileMetadata>>, (StatusCode, String)> {
-    if let Err((code, json)) = require_user(&jar, &app) {
-        return Err((code, json.to_string()));
-    }
+    multipart: Result<Multipart, MultipartRejection>,
+) -> ApiResult<Json<Vec<FileMetadata>>> {
+    require_user(&jar, &app)?;
+    let mut multipart = multipart.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
 
     let mut uploaded = Vec::new();
 
     while let Some(mut field) = multipart
         .next_field()
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Multipart error: {}", e)))?
+        .map_err(|error| ApiError::BadRequest(format!("Multipart error: {error}")))?
     {
         use crate::crypto::CHUNK_SIZE;
         use std::io::Write;
@@ -503,25 +440,16 @@ async fn upload_files(
         let filename = field.file_name().unwrap_or("unknown").to_string();
         let id = crate::domain::id::id_16();
 
-        let mut file = app.storage.create_file_writer(&id).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("IO error: {}", e),
-            )
-        })?;
-
-        let mut encryptor = app.crypto.start_encryption(&id).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Encrypt error: {e}"),
-            )
-        })?;
-        file.write_all(encryptor.header()).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("IO error: {}", e),
-            )
-        })?;
+        let mut file = app
+            .storage
+            .create_file_writer(&id)
+            .map_err(|error| ApiError::internal("Create upload file", error))?;
+        let mut encryptor = app
+            .crypto
+            .start_encryption(&id)
+            .map_err(|error| ApiError::internal("Initialize upload encryption", error))?;
+        file.write_all(encryptor.header())
+            .map_err(|error| ApiError::internal("Write encrypted header", error))?;
 
         let mut buffer = Vec::with_capacity(CHUNK_SIZE);
         let mut total_bytes: u64 = 0;
@@ -530,60 +458,37 @@ async fn upload_files(
         while let Some(bytes) = field
             .chunk()
             .await
-            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Read error: {}", e)))?
+            .map_err(|error| ApiError::BadRequest(format!("Multipart read error: {error}")))?
         {
             buffer.extend_from_slice(&bytes);
             total_bytes += bytes.len() as u64;
-
-            // Upload indicator
-            // print!(
-            //     "\rUploading {}: {:.2} MB",
-            //     filename,
-            //     total_bytes as f64 / 1024.0 / 1024.0
-            // );
-            print!("\rUploading {:.2} MB", total_bytes as f64 / 1024.0 / 1024.0);
-            std::io::stdout().flush().unwrap();
 
             // Accumulated a full chunk — encrypt and write
             while buffer.len() >= CHUNK_SIZE {
                 let chunk = buffer[..CHUNK_SIZE].to_vec();
                 buffer.drain(..CHUNK_SIZE);
 
-                let encrypted = encryptor.encrypt_chunk(&chunk).map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Encrypt error: {e}"),
-                    )
-                })?;
+                let encrypted = encryptor
+                    .encrypt_chunk(&chunk)
+                    .map_err(|error| ApiError::internal("Encrypt upload chunk", error))?;
                 file.write_all(&encrypted)
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("IO error: {e}")))?;
+                    .map_err(|error| ApiError::internal("Write upload chunk", error))?;
             }
         }
 
         // Last incomplete chunk
         if !buffer.is_empty() {
-            let encrypted = encryptor.encrypt_chunk(&buffer).map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Encrypt error: {e}"),
-                )
-            })?;
+            let encrypted = encryptor
+                .encrypt_chunk(&buffer)
+                .map_err(|error| ApiError::internal("Encrypt final upload chunk", error))?;
             file.write_all(&encrypted)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("IO error: {e}")))?;
+                .map_err(|error| ApiError::internal("Write final upload chunk", error))?;
         }
 
-        file.flush().map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("IO error: {}", e),
-            )
-        })?;
-        file.sync_all().map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("IO sync error: {e}"),
-            )
-        })?;
+        file.flush()
+            .map_err(|error| ApiError::internal("Flush upload", error))?;
+        file.sync_all()
+            .map_err(|error| ApiError::internal("Sync upload", error))?;
 
         // Save metadata
         let metadata = crate::domain::FileMetadata {
@@ -592,33 +497,28 @@ async fn upload_files(
             size: total_bytes,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .map_err(|error| ApiError::internal("Read current time", error))?
                 .as_secs(),
         };
 
         // Publish only a fully synced encrypted file. Startup cleanup removes a blob
         // if the process later crashes before its metadata transaction succeeds.
-        if let Err(e) = app.storage.finalize_file(&id) {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Finalize error: {}", e),
-            ));
+        app.storage
+            .finalize_file(&id)
+            .map_err(|error| ApiError::internal("Publish upload", error))?;
+        if let Err(error) = app.metadata.save_file(&metadata) {
+            if let Err(cleanup_error) = app.storage.delete_file(&id) {
+                tracing::error!(file_id = %id, error = %cleanup_error, "Failed to clean up unpublished blob");
+            }
+            return Err(ApiError::internal("Save upload metadata", error));
         }
-        if let Err(e) = app.metadata.save_file(&metadata) {
-            let _ = app.storage.delete_file(&id);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("DB error: {}", e),
-            ));
-        }
-
-        println!("\nUploaded  {:.2} MB", total_bytes as f64 / 1024.0 / 1024.0);
+        tracing::info!(file_id = %id, bytes = total_bytes, "Upload completed");
 
         uploaded.push(metadata);
     }
 
     if uploaded.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "No files uploaded".into()));
+        return Err(ApiError::BadRequest("No files uploaded".into()));
     }
 
     Ok(Json(uploaded))
@@ -630,9 +530,9 @@ async fn logout(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoRespons
     }
     // Cleaning up temporary files older than 4 hours
     match app.storage.cleanup_stale_tmp_files(4 * 3600) {
-        Ok(count) if count > 0 => println!("=== Logout cleanup: removed {} stale tmp files", count),
+        Ok(count) if count > 0 => tracing::info!(count, "Removed stale upload files"),
         Ok(_) => {}
-        Err(e) => eprintln!("=== Logout cleanup error: {}", e),
+        Err(error) => tracing::warn!(error = %error, "Logout upload cleanup failed"),
     }
 
     (
@@ -644,16 +544,13 @@ async fn logout(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoRespons
     )
 }
 
-fn require_user(jar: &CookieJar, app: &App) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+fn require_user(jar: &CookieJar, app: &App) -> ApiResult<()> {
     match jar
         .get("rfs_session")
         .and_then(|cookie| app.sessions.role(cookie.value()))
     {
         Some(UserRole::User) => Ok(()),
-        _ => Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": "Access denied" })),
-        )),
+        _ => Err(ApiError::Forbidden),
     }
 }
 
@@ -662,20 +559,12 @@ async fn stream_file(
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<impl IntoResponse> {
     if let Err(e) = require_user(&jar, &app) {
         return Err(e);
     }
 
-    let metadata = match app.get_file(&id) {
-        Ok(Some(m)) => m,
-        _ => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "File not found", "id": id })),
-            ));
-        }
-    };
+    let metadata = lookup_file(&app, &id)?;
 
     let file_size = metadata.size;
     let mime = blob_store::guess_mime(&metadata.filename);
@@ -685,44 +574,37 @@ async fn stream_file(
         .map(|value| value.to_str().ok())
         .flatten();
     match parse_single_range(range, file_size) {
-        Err(()) => return Err(range_not_satisfiable(file_size)),
+        Err(()) => return Err(ApiError::InvalidRange(file_size)),
         Ok(Some((start, end))) => {
             if start > end || start >= file_size {
-                return Err((
-                    StatusCode::RANGE_NOT_SATISFIABLE,
-                    Json(serde_json::json!({
-                        "error": "Invalid range",
-                        "file_size": file_size
-                    })),
-                ));
+                return Err(ApiError::InvalidRange(file_size));
             }
 
             let length = end - start + 1;
 
-            let chunks = app.export_range(&id, start, end).map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() })),
-                )
-            })?;
+            let chunks = app
+                .export_range(&id, start, end)
+                .map_err(|error| ApiError::internal("Open file range", error))?;
 
-            let stream = futures::stream::iter(
-                chunks.map(|c| c.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))),
-            );
+            let stream = futures::stream::iter(chunks.map(|chunk| {
+                chunk.map_err(|error| {
+                    tracing::error!(error = %error, "Range streaming failed");
+                    error
+                })
+            }));
 
             let mut resp_headers = secure_file_headers(
                 &mime,
                 &metadata.filename,
                 inline_safe(&mime, &metadata.filename),
-            );
-            resp_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+            )?;
+            resp_headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
             resp_headers.insert(
                 header::CONTENT_RANGE,
-                format!("bytes {}-{}/{}", start, end, file_size)
-                    .parse()
-                    .unwrap(),
+                HeaderValue::from_str(&format!("bytes {start}-{end}/{file_size}"))
+                    .map_err(|error| ApiError::internal("Build range header", error))?,
             );
-            resp_headers.insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
+            resp_headers.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
 
             return Ok((
                 StatusCode::PARTIAL_CONTENT,
@@ -735,28 +617,20 @@ async fn stream_file(
     }
 
     // Full file without Range
-    let chunks = app.export_chunked(&id).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-    })?;
+    let chunks = app
+        .export_chunked(&id)
+        .map_err(|error| ApiError::internal("Open file stream", error))?;
 
-    let stream = futures::stream::iter(chunks.map(|c| {
-        c.map(Bytes::from)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-    }));
+    let stream =
+        futures::stream::iter(chunks.map(|c| c.map(Bytes::from).map_err(log_stream_error)));
 
     let mut resp_headers = secure_file_headers(
         &mime,
         &metadata.filename,
         inline_safe(&mime, &metadata.filename),
-    );
-    resp_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
-    resp_headers.insert(
-        header::CONTENT_LENGTH,
-        file_size.to_string().parse().unwrap(),
-    );
+    )?;
+    resp_headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    resp_headers.insert(header::CONTENT_LENGTH, HeaderValue::from(file_size));
 
     Ok((StatusCode::OK, resp_headers, Body::from_stream(stream)).into_response())
 }
@@ -793,13 +667,6 @@ fn parse_single_range(range: Option<&str>, file_size: u64) -> Result<Option<(u64
         return Err(());
     }
     Ok(Some((start, end)))
-}
-
-fn range_not_satisfiable(file_size: u64) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::RANGE_NOT_SATISFIABLE,
-        Json(json!({ "error": "Invalid range", "file_size": file_size })),
-    )
 }
 
 fn inline_safe(mime: &str, filename: &str) -> bool {
@@ -848,22 +715,32 @@ fn is_text_preview(filename: &str, mime: &str) -> bool {
     )
 }
 
-fn secure_file_headers(mime: &str, filename: &str, inline: bool) -> HeaderMap {
+fn secure_file_headers(mime: &str, filename: &str, inline: bool) -> ApiResult<HeaderMap> {
     let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
-    headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(mime)
+            .map_err(|error| ApiError::internal("Build content type header", error))?,
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     let disposition = if inline { "inline" } else { "attachment" };
     let encoded_name = percent_encode_filename(filename);
     headers.insert(
         header::CONTENT_DISPOSITION,
         format!("{disposition}; filename=\"download\"; filename*=UTF-8''{encoded_name}")
             .parse()
-            .unwrap(),
+            .map_err(|error| ApiError::internal("Build content disposition header", error))?,
     );
     if inline && mime == "image/svg+xml" {
-        headers.insert("content-security-policy", "sandbox".parse().unwrap());
+        headers.insert(
+            "content-security-policy",
+            HeaderValue::from_static("sandbox"),
+        );
     }
-    headers
+    Ok(headers)
 }
 
 fn percent_encode_filename(filename: &str) -> String {
@@ -908,7 +785,10 @@ mod tests {
     }
 
     fn user_cookie(app: &App) -> String {
-        format!("rfs_session={}", app.sessions.create(UserRole::User))
+        format!(
+            "rfs_session={}",
+            app.sessions.create(UserRole::User).unwrap()
+        )
     }
     #[test]
     fn parses_standard_open_and_suffix_ranges() {
@@ -927,6 +807,96 @@ mod tests {
         assert!(inline_safe("application/json", "data.json"));
         assert!(!inline_safe("text/html", "page.html"));
         assert!(!inline_safe("application/zip", "archive.zip"));
+    }
+
+    #[tokio::test]
+    async fn database_errors_return_json_without_panicking() {
+        let (app, dir) = test_app();
+        app.metadata.insert_invalid_record("corrupt");
+        for uri in [
+            "/files",
+            "/files/corrupt",
+            "/files/corrupt/open",
+            "/files/corrupt/stream",
+            "/files/corrupt/download",
+        ] {
+            let response = create_router(app.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .header("cookie", user_cookie(&app))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{uri}"
+            );
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                json!({"error": "Internal server error"})
+            );
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejected_requests_use_json_errors() {
+        let (app, dir) = test_app();
+        for (uri, method, content_type, body, status) in [
+            (
+                "/files?per_page=bad",
+                "GET",
+                "application/json",
+                "",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/login",
+                "POST",
+                "application/json",
+                "{",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/files/upload",
+                "POST",
+                "application/octet-stream",
+                "bad",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "/files/missing/stream",
+                "GET",
+                "application/json",
+                "",
+                StatusCode::NOT_FOUND,
+            ),
+        ] {
+            let response = create_router(app.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .method(method)
+                        .header("cookie", user_cookie(&app))
+                        .header("content-type", content_type)
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{uri}");
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()["error"].is_string()
+            );
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

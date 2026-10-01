@@ -38,9 +38,9 @@ impl App {
         let crypto = Crypto::new(&config.encryption_key)?;
 
         match storage.cleanup_all_tmp_files() {
-            Ok(count) if count > 0 => println!("=== Cleaned up {} orphaned tmp files", count),
+            Ok(count) if count > 0 => tracing::info!(count, "Orphaned temporary files removed"),
             Ok(_) => {}
-            Err(e) => eprintln!("=== Cleanup error: {}", e),
+            Err(e) => tracing::warn!(error = %e, "Temporary file cleanup failed"),
         }
         let known_ids = metadata
             .list_files()?
@@ -48,9 +48,9 @@ impl App {
             .map(|file| file.id)
             .collect();
         match storage.cleanup_orphaned_files(&known_ids) {
-            Ok(count) if count > 0 => println!("=== Cleaned up {count} orphaned blobs"),
+            Ok(count) if count > 0 => tracing::info!(count, "Orphaned blobs removed"),
             Ok(_) => {}
-            Err(e) => eprintln!("=== Orphan cleanup error: {e}"),
+            Err(e) => tracing::warn!(error = %e, "Orphaned blob cleanup failed"),
         }
 
         Ok(Self {
@@ -63,16 +63,7 @@ impl App {
     }
 
     pub fn print_banner(addr: &str, data_dir: &Path) {
-        const BLUE: &str = "\x1b[36m";
-        const RESET: &str = "\x1b[0m";
-
-        println!("──────────────────────────────");
-        println!("rust-file-server v{}", env!("CARGO_PKG_VERSION"));
-        println!("──────────────────────────────");
-        println!("✓ Data:      {}", data_dir.display());
-        println!();
-        println!("→ Server online");
-        println!("→ Listening on {}http://{}{}", BLUE, addr, RESET);
+        tracing::info!(version = env!("CARGO_PKG_VERSION"), data_dir = %data_dir.display(), address = %addr, "Server online");
     }
 
     pub fn import_file(&self, path: &str) -> Result<FileMetadata, Box<dyn std::error::Error>> {
@@ -158,7 +149,7 @@ fn ensure_dir_exists<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn Error>> {
     let p = path.as_ref();
     if !p.exists() {
         fs::create_dir_all(p)?;
-        println!("Created directory: {}", p.display());
+        tracing::info!(path = %p.display(), "Directory created");
     }
     set_owner_only_permissions(p)?;
     Ok(())

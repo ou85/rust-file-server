@@ -4,11 +4,6 @@ use rand::Rng;
 use std::{collections::HashMap, sync::Mutex};
 
 pub fn authenticate(username: &str, password: &str, config: &Config) -> Option<UserRole> {
-    // println!("Input username: {}", username);
-    // println!("Input password: {}", password);
-    // println!("Stored user hash: {}", &config.user_password_hash);
-    // println!("Stored admin hash: {}", &config.admin_password_hash);
-
     match username {
         u if u == config.user_name => {
             if verify(password, &config.user_password_hash).ok()? {
@@ -38,6 +33,17 @@ pub struct SessionStore {
     sessions: Mutex<HashMap<String, UserRole>>,
 }
 
+#[derive(Debug)]
+pub struct SessionError;
+
+impl std::fmt::Display for SessionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Session storage lock is poisoned")
+    }
+}
+
+impl std::error::Error for SessionError {}
+
 impl SessionStore {
     pub fn new() -> Self {
         Self {
@@ -45,15 +51,15 @@ impl SessionStore {
         }
     }
 
-    pub fn create(&self, role: UserRole) -> String {
+    pub fn create(&self, role: UserRole) -> Result<String, SessionError> {
         let mut bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut bytes);
         let token = hex::encode(bytes);
         self.sessions
             .lock()
-            .expect("session mutex poisoned")
+            .map_err(|_| SessionError)?
             .insert(token.clone(), role);
-        token
+        Ok(token)
     }
 
     pub fn role(&self, token: &str) -> Option<UserRole> {
@@ -72,9 +78,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn poisoned_session_storage_returns_error_instead_of_panicking() {
+        let sessions = SessionStore::new();
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = sessions.sessions.lock().unwrap();
+            panic!("Simulated failure while holding the session lock");
+        });
+        assert!(sessions.create(UserRole::User).is_err());
+        assert_eq!(sessions.role("forged"), None);
+    }
+
+    #[test]
     fn session_token_is_server_side_and_revocable() {
         let sessions = SessionStore::new();
-        let token = sessions.create(UserRole::User);
+        let token = sessions.create(UserRole::User).unwrap();
         assert_eq!(sessions.role(&token), Some(UserRole::User));
         assert_eq!(sessions.role("forged"), None);
         sessions.remove(&token);

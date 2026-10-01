@@ -1,5 +1,53 @@
 use std::path::PathBuf;
 
+#[derive(Debug)]
+pub enum ConfigError {
+    Arguments(String),
+    Environment {
+        name: &'static str,
+        source: std::env::VarError,
+    },
+    ExecutablePath(std::io::Error),
+    MissingExecutableDirectory,
+    InvalidPort(String),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Arguments(message) => f.write_str(message),
+            Self::Environment { name, .. } => write!(
+                f,
+                "Set {name} to a valid UTF-8 value before starting the server"
+            ),
+            Self::ExecutablePath(error) => {
+                write!(f, "Could not determine executable path: {error}")
+            }
+            Self::MissingExecutableDirectory => {
+                f.write_str("Executable path has no parent directory")
+            }
+            Self::InvalidPort(value) => write!(
+                f,
+                "PORT must be an integer between 0 and 65535; received {value:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Environment { source, .. } => Some(source),
+            Self::ExecutablePath(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+fn required_env(name: &'static str) -> Result<String, ConfigError> {
+    std::env::var(name).map_err(|source| ConfigError::Environment { name, source })
+}
+
 pub struct Config {
     pub data_dir: PathBuf,
     pub blobs_dir: PathBuf,
@@ -16,7 +64,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn from_args(args: &[String]) -> Result<Self, String> {
+    pub fn from_args(args: &[String]) -> Result<Self, ConfigError> {
         let mut local_only = false;
         let mut data_dir = None;
         let mut index = 0;
@@ -26,13 +74,18 @@ impl Config {
                 "--local" => local_only = true,
                 "--data-dir" => {
                     index += 1;
-                    let value = args
-                        .get(index)
-                        .ok_or("--data-dir requires a directory path")?;
+                    let value = args.get(index).ok_or_else(|| {
+                        ConfigError::Arguments("--data-dir requires a directory path".into())
+                    })?;
                     data_dir = Some(PathBuf::from(value));
                 }
-                "--help" | "-h" => return Err(usage()),
-                option => return Err(format!("Unknown option: {option}\n\n{}", usage())),
+                "--help" | "-h" => return Err(ConfigError::Arguments(usage())),
+                option => {
+                    return Err(ConfigError::Arguments(format!(
+                        "Unknown option: {option}\n\n{}",
+                        usage()
+                    )));
+                }
             }
             index += 1;
         }
@@ -41,7 +94,8 @@ impl Config {
             Some(path) => path,
             None => std::env::var_os("RFS_DATA_DIR")
                 .map(PathBuf::from)
-                .unwrap_or(default_data_dir()?),
+                .map(Ok)
+                .unwrap_or_else(default_data_dir)?,
         };
 
         Ok(Self {
@@ -49,31 +103,41 @@ impl Config {
             tmp_dir: data_dir.join("tmp"),
             metadata_path: data_dir.join("metadata.redb"),
             data_dir,
-            encryption_key: std::env::var("RFS_ENCRYPTION_KEY")
-                .expect("RFS_ENCRYPTION_KEY is not set"),
+            encryption_key: required_env("RFS_ENCRYPTION_KEY")?,
             user_name: "user".to_string(),
-            user_password_hash: std::env::var("RFS_USER_PASSWORD_HASH")
-                .expect("RFS_USER_PASSWORD_HASH is not set"),
+            user_password_hash: required_env("RFS_USER_PASSWORD_HASH")?,
             admin_name: "admin".to_string(),
-            admin_password_hash: std::env::var("RFS_ADMIN_PASSWORD_HASH")
-                .expect("RFS_ADMIN_PASSWORD_HASH is not set"),
-            bind_address: bind_address(local_only),
+            admin_password_hash: required_env("RFS_ADMIN_PASSWORD_HASH")?,
+            bind_address: bind_address(local_only)?,
         })
     }
 }
 
-fn bind_address(local_only: bool) -> String {
-    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+fn bind_address(local_only: bool) -> Result<String, ConfigError> {
+    let port = match std::env::var("PORT") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => "3000".to_string(),
+        Err(source) => {
+            return Err(ConfigError::Environment {
+                name: "PORT",
+                source,
+            });
+        }
+    };
+    let port = parse_port(port)?;
     let host = if local_only { "127.0.0.1" } else { "0.0.0.0" };
-    format!("{host}:{port}")
+    Ok(format!("{host}:{port}"))
 }
 
-fn default_data_dir() -> Result<PathBuf, String> {
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("Could not determine executable path: {error}"))?;
+fn parse_port(value: String) -> Result<u16, ConfigError> {
+    value.parse().map_err(|_| ConfigError::InvalidPort(value))
+}
+
+fn default_data_dir() -> Result<PathBuf, ConfigError> {
+    let executable = std::env::current_exe().map_err(ConfigError::ExecutablePath)?;
     let executable_dir = executable
         .parent()
-        .ok_or("Executable path has no parent directory")?;
+        .ok_or(ConfigError::MissingExecutableDirectory)?;
     Ok(executable_dir.join("data"))
 }
 
@@ -89,15 +153,29 @@ pub fn usage() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::bind_address;
+    use super::{ConfigError, bind_address, parse_port};
+
+    #[test]
+    fn invalid_configuration_has_actionable_errors() {
+        for value in ["bad", "65536", "-1"] {
+            let error = parse_port(value.into()).unwrap_err();
+            assert!(matches!(error, ConfigError::InvalidPort(_)));
+            assert!(error.to_string().contains("PORT must be an integer"));
+        }
+        let error = ConfigError::Environment {
+            name: "RFS_ENCRYPTION_KEY",
+            source: std::env::VarError::NotPresent,
+        };
+        assert!(error.to_string().contains("Set RFS_ENCRYPTION_KEY"));
+    }
 
     #[test]
     fn local_flag_binds_loopback() {
-        assert_eq!(bind_address(true), "127.0.0.1:3000");
+        assert_eq!(bind_address(true).unwrap(), "127.0.0.1:3000");
     }
 
     #[test]
     fn network_default_binds_all_interfaces() {
-        assert_eq!(bind_address(false), "0.0.0.0:3000");
+        assert_eq!(bind_address(false).unwrap(), "0.0.0.0:3000");
     }
 }

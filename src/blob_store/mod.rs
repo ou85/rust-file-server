@@ -82,7 +82,7 @@ impl Storage {
     pub fn new(root_path: PathBuf, tmp_path: PathBuf) -> io::Result<Self> {
         fs::create_dir_all(&root_path)?;
         fs::create_dir_all(&tmp_path)?;
-        println!("\n=== Storage initialized");
+        tracing::info!("Storage initialized");
         Ok(Self {
             root_path,
             tmp_path,
@@ -146,7 +146,7 @@ impl Storage {
             if !known_ids.contains(&id) {
                 fs::remove_file(entry.path())?;
                 removed += 1;
-                println!("=== Removed orphaned blob: {id}");
+                tracing::debug!(file_id = %id, "Orphaned blob removed");
             }
         }
         Ok(removed)
@@ -156,7 +156,9 @@ impl Storage {
         let content = fs::read(path)?;
         let filename = Path::new(path)
             .file_name()
-            .unwrap()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "File path has no filename")
+            })?
             .to_string_lossy()
             .to_string();
         Ok(StoredFile {
@@ -233,7 +235,7 @@ impl Storage {
             if name.ends_with(".partial") {
                 if fs::remove_file(entry.path()).is_ok() {
                     removed += 1;
-                    println!("=== Removed orphaned tmp file: {}", name);
+                    tracing::debug!(filename = %name, "Orphaned temporary file removed");
                 }
             }
         }
@@ -257,7 +259,7 @@ impl Storage {
                             if elapsed > max_age {
                                 if fs::remove_file(entry.path()).is_ok() {
                                     removed += 1;
-                                    println!("=== Removed stale tmp file: {}", name);
+                                    tracing::debug!(filename = %name, "Stale temporary file removed");
                                 }
                             }
                         }

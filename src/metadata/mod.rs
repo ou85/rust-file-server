@@ -8,6 +8,16 @@ pub struct MetadataStore {
 }
 
 impl MetadataStore {
+    #[cfg(test)]
+    pub(crate) fn insert_invalid_record(&self, id: &str) {
+        let transaction = self.db.begin_write().unwrap();
+        {
+            let mut table = transaction.open_table(FILES).unwrap();
+            table.insert(id, "not valid JSON").unwrap();
+        }
+        transaction.commit().unwrap();
+    }
+
     pub fn new(config: &Config) -> Result<Self, Box<dyn std::error::Error>> {
         let db = Database::create(&config.metadata_path)?;
 
@@ -18,7 +28,7 @@ impl MetadataStore {
         }
         write_txn.commit()?;
 
-        println!("=== Database initialized");
+        tracing::info!("Database initialized");
 
         Ok(Self { db })
     }
