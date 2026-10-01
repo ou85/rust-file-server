@@ -29,11 +29,10 @@ impl Iterator for RangeChunkIterator {
             return None;
         }
 
-        let frame_len = if self.current_chunk == self.last_chunk {
-            self.file_len.saturating_sub(self.offset) as usize
-        } else {
-            self.frame_size as usize
-        };
+        // The end of the requested range is not necessarily the end of the file.
+        let frame_len = self
+            .frame_size
+            .min(self.file_len.saturating_sub(self.offset)) as usize;
         if frame_len < 12 {
             return Some(Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -348,6 +347,39 @@ mod tests {
     use super::*;
 
     const KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    #[test]
+    fn ranges_in_large_files_stop_at_encrypted_frame_boundaries() {
+        use crate::crypto::CHUNK_SIZE;
+        let root = std::env::temp_dir().join(format!("rfs-range-test-{}", uuid::Uuid::new_v4()));
+        let storage = Storage::new(root.join("blobs"), root.join("tmp")).unwrap();
+        let crypto = Crypto::new(KEY).unwrap();
+        let source: Vec<u8> = (0..2 * CHUNK_SIZE + 4096)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let file = StoredFile {
+            id: "large-file".into(),
+            filename: "large.bin".into(),
+            content: source.clone(),
+        };
+        storage.save_file(&file, &crypto).unwrap();
+        for (start, end) in [
+            (11, 4095),
+            (CHUNK_SIZE + 17, CHUNK_SIZE + 1023),
+            (CHUNK_SIZE - 100, CHUNK_SIZE + 100),
+            (2 * CHUNK_SIZE - 100, 2 * CHUNK_SIZE + 100),
+            (source.len() - 100, source.len() - 1),
+        ] {
+            let actual = storage
+                .stream_chunks_range(&file.id, &crypto, start as u64, end as u64)
+                .unwrap()
+                .collect::<io::Result<Vec<_>>>()
+                .unwrap()
+                .concat();
+            assert_eq!(actual, source[start..=end], "range {start}-{end}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn streams_full_file_and_requested_range() {
