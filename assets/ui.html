@@ -215,11 +215,14 @@
         .selection-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 12px; min-height: 36px; visibility: hidden; opacity: 0; pointer-events: none; transition: opacity .12s ease; }
         .selection-toolbar.visible { visibility: visible; opacity: 1; pointer-events: auto; }
         .selection-count, .selection-action { height: 34px; border: 1px solid #d0d0d0; border-radius: 8px; background: #fff; color: #222; font: inherit; font-size: 13px; }
-        .selection-count { display: inline-flex; align-items: center; justify-content: center; min-width: 4.5rem; padding: 0 .6875rem; background: #efefed; }
+        .selection-count { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-width: 5.25rem; height: 2.125rem; margin-right: 1rem; padding: 0 .6875rem; border: 1px solid #d0d0d0; border-radius: 1.0625rem; 
+            /* background: #efefed;  */
+            color: #222; font: inherit; font-size: .8125rem; cursor: pointer; }
+        .selection-count:hover { background: #e7e7e4; border-color: #b9b9b5; }
+        .selection-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; border: 1px solid #b9b9b5; border-radius: 50%; font-size: 1rem; line-height: 1; }
         .selection-action { min-width: 34px; padding: 0 10px; cursor: pointer; }
         .selection-action:hover { background: #f2f2f2; border-color: #b9b9b5; }
         .selection-delete:hover { color: #c73d3d; border-color: #d85b5b; background: #fff7f7; }
-        .selection-clear { width: 1.9375rem; min-width: 1.9375rem; height: 1.9375rem; margin-right: 1rem; padding: 0; border-radius: 50%; }
         .selection-delete { color: #c73d3d; border-color: #d85b5b; }
         .selection-download { color: #348b50; border-color: #65b87d; font-size: 1.15rem; font-weight: 700; line-height: 1; }
         .selection-download:hover { color: #26733e; border-color: #348b50; background: #edf9f1; }
@@ -231,7 +234,7 @@
         .files-table th, .files-table td { padding: .875rem .625rem; border-bottom: 1px solid #e5e5e2; }
         .files-table th:first-child, .files-table td:first-child { width: 2.25rem; }
         .files-table th:nth-child(2), .files-table td:nth-child(2) { width: auto; }
-        .files-table th:nth-child(3), .files-table td:nth-child(3) { width: 10rem; }
+        .files-table th:nth-child(3), .files-table td:nth-child(3) { width: 8.125rem; }
         .files-table th:nth-child(4), .files-table td:nth-child(4) { width: 6rem; white-space: nowrap; }
         .files-table th:last-child, .files-table td:last-child { width: 4.375rem; padding-left: 0; padding-right: .625rem; text-align: right; }
         .files-table th { background: transparent; color: #858585; font-size: .8125rem; font-weight: 400; }
@@ -288,8 +291,7 @@
         </select>
     </div>
     <div class="selection-toolbar" id="selectionToolbar">
-        <span class="selection-count" id="selectionCount"></span>
-        <button type="button" class="selection-action selection-clear" onclick="clearSelection()" aria-label="Clear selected files">×</button>
+        <button type="button" class="selection-count" onclick="clearSelection()" aria-label="Clear selected files"><span id="selectionCount"></span><span class="selection-dismiss" aria-hidden="true">×</span></button>
         <button type="button" class="selection-action selection-download" onclick="downloadSelected()" aria-label="Download selected files">↓</button>
         <button type="button" class="selection-action selection-delete" onclick="deleteSelected()" aria-label="Delete selected files">🗑</button>
     </div>
