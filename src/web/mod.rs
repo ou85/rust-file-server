@@ -17,6 +17,13 @@ use axum::body::Body;
 
 use serde_json::json;
 
+#[derive(serde::Serialize)]
+struct StorageStats {
+    used_bytes: u64,
+    total_bytes: u64,
+    available_bytes: u64,
+}
+
 pub fn create_router(state: Arc<App>) -> Router {
     Router::new()
         .route("/", get(root))
@@ -24,6 +31,7 @@ pub fn create_router(state: Arc<App>) -> Router {
         .route("/login", get(login_page))
         .route("/logout", post(logout))
         .route("/health", get(health))
+        .route("/storage", get(storage_stats))
         .route("/files", get(list_files).delete(delete_files))
         .route("/files/{id}", get(get_file))
         .route("/files/upload", post(upload_files))
@@ -37,6 +45,38 @@ pub fn create_router(state: Arc<App>) -> Router {
 
 async fn health() -> &'static str {
     "OK"
+}
+
+async fn storage_stats(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+) -> Result<Json<StorageStats>, (StatusCode, Json<serde_json::Value>)> {
+    require_user(&jar, &app)?;
+    let path = std::ffi::CString::new(app.config.data_dir.as_os_str().as_encoded_bytes()).map_err(
+        |_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Invalid data directory"})),
+            )
+        },
+    )?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    let result = unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) };
+    if result != 0 {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": std::io::Error::last_os_error().to_string()})),
+        ));
+    }
+    let stats = unsafe { stats.assume_init() };
+    let block_size = stats.f_frsize as u64;
+    let total_bytes = (stats.f_blocks as u64).saturating_mul(block_size);
+    let available_bytes = (stats.f_bavail as u64).saturating_mul(block_size);
+    Ok(Json(StorageStats {
+        used_bytes: total_bytes.saturating_sub(available_bytes),
+        total_bytes,
+        available_bytes,
+    }))
 }
 
 pub async fn root(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoResponse {

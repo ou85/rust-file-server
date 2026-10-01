@@ -181,6 +181,7 @@
         .storage-value { font-weight: 600; }
         .storage-placeholder { margin-top: 10px; height: 8px; overflow: hidden; border-radius: 4px; background: #e6e6e6; }
         .storage-placeholder span { display: block; width: 0; height: 100%; background: #36c76b; }
+        .storage-meta { display: flex; justify-content: space-between; margin-top: 6px; color: #666; font-size: 13px; }
         .files-card { padding-bottom: 10px; }
         .files-card h2 { margin: 0 0 18px; font-size: 20px; font-weight: 700; }
         .upload-card { display: block; margin: 0 0 18px; padding: 0; background: transparent; box-shadow: none; }
@@ -275,8 +276,9 @@
     <section class="status-card" aria-label="Server status">
         <div class="status-row"><span>Server</span><span class="status-online">online</span></div>
         <hr class="status-divider">
-        <div class="status-row"><span>Storage</span><span class="storage-value">—</span></div>
-        <div class="storage-placeholder" aria-hidden="true"><span></span></div>
+        <div class="status-row"><span>Storage</span><span class="storage-value"><span id="storageUsed">—</span> of <span id="storageTotal">—</span></span></div>
+        <div class="storage-placeholder" aria-hidden="true"><span id="storageProgress"></span></div>
+        <div class="storage-meta"><span id="storagePercent">—</span><span id="storageAvailable">— available</span></div>
         <hr class="status-divider">
     </section>
     <section class="files-card">
@@ -336,11 +338,25 @@
         const selectedIds = new Set();
 
         async function load() {
-            const res = await fetch('/files');
-            allFiles = await res.json();
+            const [filesRes] = await Promise.all([fetch('/files'), loadStorage()]);
+            allFiles = await filesRes.json();
             const currentIds = new Set(allFiles.map(file => file.id));
             [...selectedIds].forEach(id => { if (!currentIds.has(id)) selectedIds.delete(id); });
             renderFiles();
+        }
+
+        async function loadStorage() {
+            try {
+                const response = await fetch('/storage');
+                if (!response.ok) return;
+                const storage = await response.json();
+                const percent = storage.total_bytes ? (storage.used_bytes / storage.total_bytes) * 100 : 0;
+                document.getElementById('storageUsed').textContent = formatStorageSize(storage.used_bytes);
+                document.getElementById('storageTotal').textContent = formatStorageSize(storage.total_bytes);
+                document.getElementById('storageAvailable').textContent = `${formatStorageSize(storage.available_bytes)} available`;
+                document.getElementById('storagePercent').textContent = `${percent.toFixed(1)}%`;
+                document.getElementById('storageProgress').style.width = `${Math.min(100, percent)}%`;
+            } catch (_) { /* Keep the placeholder if storage stats are unavailable. */ }
         }
 
         function renderFiles() {
@@ -696,6 +712,11 @@
             if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
             if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
             return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
+        }
+
+        function formatStorageSize(bytes) {
+            if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(2)} MB`;
+            return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
         }
 
         async function logout() {

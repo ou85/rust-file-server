@@ -946,6 +946,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "hex",
+ "libc",
  "mime_guess",
  "rand",
  "redb",
