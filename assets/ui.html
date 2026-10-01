@@ -200,11 +200,19 @@
                 const size = document.createElement('td'); size.textContent = formatSize(f.size); row.appendChild(size);
                 const date = document.createElement('td'); date.textContent = formatDate(f.created_at); row.appendChild(date);
                 const actions = document.createElement('td');
-                [['Open', () => openFile(f.id)], ['⭳', () => downloadFile(f.id)], ['🗑', () => deleteFile(f.id)]].forEach(([text, action]) => {
+                const actionsList = [];
+                if (canOpen(f.filename)) actionsList.push(['Open', () => openFile(f.id)]);
+                actionsList.push(['⭳', () => downloadFile(f.id)], ['🗑', () => deleteFile(f.id)]);
+                actionsList.forEach(([text, action]) => {
                     const button = document.createElement('button'); button.textContent = text; button.addEventListener('click', action); actions.appendChild(button);
                 });
                 row.appendChild(actions); table.appendChild(row);
             });
+        }
+
+        function canOpen(filename) {
+            const name = filename.toLowerCase();
+            return /\.(pdf|svg|md|png|jpe?g|gif|webp|avif|mp4|webm|mov|m4v|mp3|wav|ogg|flac)$/.test(name);
         }
         // function openFile(id) { window.open('/files/' + id + '/open', '_blank'); }
         // function downloadFile(id) { window.location = '/files/' + id + '/download'; }

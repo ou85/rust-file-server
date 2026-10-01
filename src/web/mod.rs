@@ -452,8 +452,11 @@ async fn stream_file(
                 chunks.map(|c| c.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))),
             );
 
-            let mut resp_headers =
-                secure_file_headers(&mime, &metadata.filename, inline_safe(&mime));
+            let mut resp_headers = secure_file_headers(
+                &mime,
+                &metadata.filename,
+                inline_safe(&mime, &metadata.filename),
+            );
             resp_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
             resp_headers.insert(
                 header::CONTENT_RANGE,
@@ -486,7 +489,11 @@ async fn stream_file(
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }));
 
-    let mut resp_headers = secure_file_headers(&mime, &metadata.filename, inline_safe(&mime));
+    let mut resp_headers = secure_file_headers(
+        &mime,
+        &metadata.filename,
+        inline_safe(&mime, &metadata.filename),
+    );
     resp_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
     resp_headers.insert(
         header::CONTENT_LENGTH,
@@ -537,12 +544,19 @@ fn range_not_satisfiable(file_size: u64) -> (StatusCode, Json<serde_json::Value>
     )
 }
 
-fn inline_safe(mime: &str) -> bool {
+fn inline_safe(mime: &str, filename: &str) -> bool {
     matches!(
         mime,
-        "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/avif"
+        "image/png"
+            | "image/jpeg"
+            | "image/gif"
+            | "image/webp"
+            | "image/avif"
+            | "image/svg+xml"
+            | "application/pdf"
     ) || mime.starts_with("video/")
         || mime.starts_with("audio/")
+        || filename.to_ascii_lowercase().ends_with(".md")
 }
 
 fn secure_file_headers(mime: &str, filename: &str, inline: bool) -> HeaderMap {
@@ -557,6 +571,9 @@ fn secure_file_headers(mime: &str, filename: &str, inline: bool) -> HeaderMap {
             .parse()
             .unwrap(),
     );
+    if inline && mime == "image/svg+xml" {
+        headers.insert("content-security-policy", "sandbox".parse().unwrap());
+    }
     headers
 }
 
@@ -586,5 +603,9 @@ mod tests {
     #[test]
     fn encodes_filename_without_header_injection() {
         assert_eq!(percent_encode_filename("a\r\nb.txt"), "a%0D%0Ab.txt");
+        assert!(inline_safe("application/pdf", "document.pdf"));
+        assert!(inline_safe("image/svg+xml", "drawing.svg"));
+        assert!(inline_safe("text/markdown", "README.md"));
+        assert!(!inline_safe("application/zip", "archive.zip"));
     }
 }
