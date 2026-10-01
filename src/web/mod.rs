@@ -229,35 +229,7 @@ async fn open_file(
         }
     };
 
-    let mime = blob_store::guess_mime(&metadata.filename);
-
-    // Video and audio — redirect to stream
-    if mime.starts_with("video/") || mime.starts_with("audio/") {
-        return Ok(Redirect::to(&format!("/files/{}/stream", id)).into_response());
-    }
-
-    // The rest is the size limit; then we output the bytes.
-    let max_preview_size = app.config.max_preview_size_bytes;
-    if metadata.size > max_preview_size {
-        return Err((
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(serde_json::json!({
-                "error": "File too large for preview",
-                "max_size_mb": max_preview_size,
-                "file_size": metadata.size,
-                "id": id
-            })),
-        ));
-    }
-
-    let bytes = app.export_to_bytes(&id).map_err(|err| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": err.to_string(), "id": id })),
-        )
-    })?;
-
-    Ok((StatusCode::OK, [("Content-Type".to_string(), mime)], bytes).into_response())
+    Ok(Redirect::to(&format!("/files/{}/stream", metadata.id)).into_response())
 }
 
 async fn upload_files(

@@ -122,11 +122,6 @@ impl App {
         Ok(())
     }
 
-    /// For preview (open_file) - small files, everything in memory
-    pub fn export_to_bytes(&self, id: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        Ok(self.storage.export_to_bytes(id, &self.crypto)?)
-    }
-
     /// For download/stream - returns an iterator over chunks
     pub fn export_chunked(&self, id: &str) -> Result<ChunkIterator, Box<dyn std::error::Error>> {
         Ok(self.storage.stream_chunks(id, &self.crypto)?)

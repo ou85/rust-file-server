@@ -1,19 +1,21 @@
 use crate::{crypto::Crypto, domain::StoredFile};
 use aes_gcm::{Nonce, aead::Aead};
 use std::{
-    fs, io,
+    fs,
+    io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
 
 /// Iterator over decrypted chunks for a byte range.
 /// Skips chunks before the range, decrypts only what's needed.
 pub struct RangeChunkIterator {
-    data: Vec<u8>,
-    offset: usize,
-    frame_size: usize,
+    file: fs::File,
+    offset: u64,
+    file_len: u64,
+    frame_size: u64,
     cipher: aes_gcm::Aes256Gcm,
-    current_chunk: usize,
-    last_chunk: usize,
+    current_chunk: u64,
+    last_chunk: u64,
     skip_bytes: usize,
     remaining: usize,
 }
@@ -26,16 +28,22 @@ impl Iterator for RangeChunkIterator {
             return None;
         }
 
-        let end = (self.offset + self.frame_size).min(self.data.len());
-        let frame = &self.data[self.offset..end];
-
-        if frame.len() < 12 {
+        let frame_len = if self.current_chunk == self.last_chunk {
+            self.file_len.saturating_sub(self.offset) as usize
+        } else {
+            self.frame_size as usize
+        };
+        if frame_len < 12 {
             return Some(Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "corrupt chunk",
             )));
         }
 
+        let mut frame = vec![0u8; frame_len];
+        if let Err(error) = self.file.read_exact(&mut frame) {
+            return Some(Err(error));
+        }
         let nonce_bytes: [u8; 12] = frame[..12].try_into().unwrap();
         let ciphertext = &frame[12..];
 
@@ -52,7 +60,7 @@ impl Iterator for RangeChunkIterator {
             }
         };
 
-        self.offset += frame.len();
+        self.offset += frame_len as u64;
         self.current_chunk += 1;
 
         let start = self.skip_bytes;
@@ -100,25 +108,25 @@ impl Storage {
     /// Reads an encrypted file and returns an iterator over the decrypted chunks (one chunk ~8MB )
     pub fn stream_chunks(&self, id: &str, crypto: &Crypto) -> io::Result<ChunkIterator> {
         let path = self.file_path(id);
-        let data = fs::read(path)?;
-
-        let (offset, chunk_size, cipher) = crypto.parse_cipher(id, &data)?;
+        let mut file = fs::File::open(path)?;
+        let file_len = file.metadata()?.len();
+        let mut header = [0u8; 25];
+        let bytes_read = file.read(&mut header)?;
+        let (offset, chunk_size, cipher) = crypto.parse_cipher(id, &header[..bytes_read])?;
+        if file_len < offset as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "truncated file header",
+            ));
+        }
+        file.seek(SeekFrom::Start(offset as u64))?;
 
         Ok(ChunkIterator {
-            data,
-            offset,
+            file,
+            remaining_encrypted: file_len - offset as u64,
             chunk_size,
             cipher,
         })
-    }
-
-    /// For small files (open/preview) - reads everything in Vec<u8>
-    pub fn export_to_bytes(&self, id: &str, crypto: &Crypto) -> io::Result<Vec<u8>> {
-        let mut result = Vec::new();
-        for chunk in self.stream_chunks(id, crypto)? {
-            result.extend_from_slice(&chunk?);
-        }
-        Ok(result)
     }
 
     pub fn delete_file(&self, id: &str) -> io::Result<()> {
@@ -148,22 +156,30 @@ impl Storage {
         byte_end: u64,
     ) -> io::Result<RangeChunkIterator> {
         let path = self.file_path(id);
-        let data = fs::read(path)?;
+        let mut file = fs::File::open(path)?;
+        let file_len = file.metadata()?.len();
+        let mut header = [0u8; 25];
+        let bytes_read = file.read(&mut header)?;
+        let (header_len, chunk_size, cipher) = crypto.parse_cipher(id, &header[..bytes_read])?;
+        let frame_size = (12 + chunk_size + 16) as u64;
 
-        let (header_len, chunk_size, cipher) = crypto.parse_cipher(id, &data)?;
-        let frame_size = 12 + chunk_size + 16; // nonce + ciphertext + GCM tag
-
-        let first_chunk = byte_start as usize / chunk_size;
-        let last_chunk = byte_end as usize / chunk_size;
-        let skip_bytes = byte_start as usize % chunk_size;
+        let first_chunk = byte_start / chunk_size as u64;
+        let last_chunk = byte_end / chunk_size as u64;
+        let skip_bytes = (byte_start % chunk_size as u64) as usize;
         let remaining = (byte_end - byte_start + 1) as usize;
-
-        // Fast-forward directly to the required chunk, skipping the previous ones
-        let offset = header_len + first_chunk * frame_size;
+        let offset = header_len as u64 + first_chunk * frame_size;
+        if offset >= file_len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "range points outside encrypted data",
+            ));
+        }
+        file.seek(SeekFrom::Start(offset))?;
 
         Ok(RangeChunkIterator {
-            data,
+            file,
             offset,
+            file_len,
             frame_size,
             cipher,
             current_chunk: first_chunk,
@@ -243,17 +259,17 @@ impl Storage {
 /// Iterator over decrypted chunks.
 /// Stores data of one chunk at a time in RAM
 pub struct ChunkIterator {
-    data: Vec<u8>,
-    offset: usize,
+    file: fs::File,
+    remaining_encrypted: u64,
     chunk_size: usize,
     cipher: aes_gcm::Aes256Gcm,
 }
 
-impl<'a> Iterator for ChunkIterator {
+impl Iterator for ChunkIterator {
     type Item = io::Result<Vec<u8>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.offset >= self.data.len() {
+        if self.remaining_encrypted == 0 {
             return None;
         }
 
@@ -261,8 +277,11 @@ impl<'a> Iterator for ChunkIterator {
         let ct_size = self.chunk_size + 16;
         // nonce (12) + ciphertext
         let frame_size = 12 + ct_size;
-        let end = (self.offset + frame_size).min(self.data.len());
-        let frame = &self.data[self.offset..end];
+        let frame_len = (frame_size as u64).min(self.remaining_encrypted) as usize;
+        let mut frame = vec![0u8; frame_len];
+        if let Err(error) = self.file.read_exact(&mut frame) {
+            return Some(Err(error));
+        }
 
         if frame.len() < 12 {
             return Some(Err(io::Error::new(
@@ -279,7 +298,7 @@ impl<'a> Iterator for ChunkIterator {
             ciphertext,
         ) {
             Ok(plain) => {
-                self.offset += frame.len();
+                self.remaining_encrypted -= frame_len as u64;
                 Some(Ok(plain))
             }
             Err(_) => Some(Err(io::Error::new(
@@ -296,4 +315,41 @@ pub fn guess_mime(filename: &str) -> String {
     mime_guess::from_path(filename)
         .first_or_octet_stream()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    #[test]
+    fn streams_full_file_and_requested_range() {
+        let root = std::env::temp_dir().join(format!("rfs-stream-test-{}", uuid::Uuid::new_v4()));
+        let storage = Storage::new(root.join("blobs"), root.join("tmp")).unwrap();
+        let crypto = Crypto::new(KEY).unwrap();
+        let source = b"streaming encrypted content".to_vec();
+        let file = StoredFile {
+            id: "test-file".into(),
+            filename: "test.txt".into(),
+            content: source.clone(),
+        };
+        storage.save_file(&file, &crypto).unwrap();
+
+        let all: Vec<u8> = storage
+            .stream_chunks(&file.id, &crypto)
+            .unwrap()
+            .collect::<io::Result<Vec<_>>>()
+            .unwrap()
+            .concat();
+        let range: Vec<u8> = storage
+            .stream_chunks_range(&file.id, &crypto, 3, 11)
+            .unwrap()
+            .collect::<io::Result<Vec<_>>>()
+            .unwrap()
+            .concat();
+        assert_eq!(all, source);
+        assert_eq!(range, source[3..=11]);
+        fs::remove_dir_all(root).unwrap();
+    }
 }

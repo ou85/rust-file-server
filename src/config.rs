@@ -12,7 +12,6 @@ pub struct Config {
     pub user_password_hash: String,
     pub admin_password_hash: String,
 
-    pub max_preview_size_bytes: u64,
     pub bind_address: String,
 }
 
@@ -58,7 +57,6 @@ impl Config {
             admin_name: "admin".to_string(),
             admin_password_hash: std::env::var("RFS_ADMIN_PASSWORD_HASH")
                 .expect("RFS_ADMIN_PASSWORD_HASH is not set"),
-            max_preview_size_bytes: max_preview_size(),
             bind_address: bind_address(local_only),
         })
     }
@@ -87,27 +85,6 @@ pub fn usage() -> String {
          --data-dir <PATH>  data directory (also configurable with RFS_DATA_DIR)",
         std::env::args().next().unwrap_or_else(|| "rfs".to_string())
     )
-}
-
-fn max_preview_size() -> u64 {
-    let mb = match std::env::var("RFS_MAX_PREVIEW_SIZE_MB") {
-        Ok(value) => match value.parse::<u64>() {
-            Ok(size) => size,
-            Err(_) => {
-                eprintln!(
-                    "Invalid RFS_MAX_PREVIEW_SIZE_MB value: {}, using 200",
-                    value
-                );
-                200
-            }
-        },
-        Err(_) => {
-            eprintln!("RFS_MAX_PREVIEW_SIZE_MB not set, using 200");
-            200
-        }
-    };
-
-    mb * 1024 * 1024
 }
 
 #[cfg(test)]
