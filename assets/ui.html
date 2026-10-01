@@ -216,7 +216,6 @@
         .selection-toolbar.visible { visibility: visible; opacity: 1; pointer-events: auto; }
         .selection-count, .selection-action { height: 34px; border: 1px solid #d0d0d0; border-radius: 8px; background: #fff; color: #222; font: inherit; font-size: 13px; }
         .selection-count { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-width: 5.25rem; height: 2.125rem; margin-right: 1rem; padding: 0 .6875rem; border: 1px solid #d0d0d0; border-radius: 1.0625rem; 
-            /* background: #efefed;  */
             color: #222; font: inherit; font-size: .8125rem; cursor: pointer; }
         .selection-count:hover { background: #e7e7e4; border-color: #b9b9b5; }
         .selection-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; border: 1px solid #b9b9b5; border-radius: 50%; font-size: 1rem; line-height: 1; }
@@ -520,9 +519,16 @@
         function deleteCurrentImage() {
             const file = imagePreviewFiles[imagePreviewIndex];
             if (!file) return;
+            const deletedIndex = imagePreviewIndex;
             showConfirmModal(`Permanently delete ${file.filename}?`, async () => {
                 await performDelete(file.id);
-                closeImageModal();
+                imagePreviewFiles.splice(deletedIndex, 1);
+                if (deletedIndex === 0 || imagePreviewFiles.length === 0) {
+                    closeImageModal();
+                    return;
+                }
+                imagePreviewIndex = deletedIndex - 1;
+                updateImageModal();
             });
         }
 
