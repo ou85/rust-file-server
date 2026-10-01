@@ -70,6 +70,8 @@ pub fn create_router(state: Arc<App>) -> Router {
         .route("/files/{id}/player", get(video_player))
         .route("/files/{id}/stream", get(stream_file))
         .route("/files/{id}/download", get(download_file))
+        .fallback(|| async { ApiError::NotFound("Page not found") })
+        .layer(axum::middleware::from_fn(error::browser_error_pages))
         .with_state(state)
 }
 
@@ -807,6 +809,119 @@ mod tests {
         assert!(inline_safe("application/json", "data.json"));
         assert!(!inline_safe("text/html", "page.html"));
         assert!(!inline_safe("application/zip", "archive.zip"));
+    }
+
+    #[tokio::test]
+    async fn browser_navigation_gets_pages_for_all_error_statuses() {
+        let (app, dir) = test_app();
+        app.metadata
+            .save_file(&FileMetadata {
+                id: "range-test".into(),
+                filename: "video.mp4".into(),
+                size: 10,
+                created_at: 0,
+            })
+            .unwrap();
+        app.metadata.insert_invalid_record("corrupt");
+        for (uri, method, body, status) in [
+            ("/login", "POST", "{", StatusCode::BAD_REQUEST),
+            (
+                "/login",
+                "POST",
+                r#"{"username":"unknown","password":"wrong"}"#,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "/assets/icons/unknown.png",
+                "GET",
+                "",
+                StatusCode::NOT_FOUND,
+            ),
+            ("/unknown", "GET", "", StatusCode::NOT_FOUND),
+            ("/health", "DELETE", "", StatusCode::METHOD_NOT_ALLOWED),
+            (
+                "/files/range-test/stream",
+                "GET",
+                "",
+                StatusCode::RANGE_NOT_SATISFIABLE,
+            ),
+            (
+                "/files/corrupt/download",
+                "GET",
+                "",
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ] {
+            let response = create_router(app.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .method(method)
+                        .header(header::ACCEPT, "text/html,application/xhtml+xml,*/*;q=0.8")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .header(header::RANGE, "bytes=100-")
+                        .header(header::COOKIE, user_cookie(&app))
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{uri}");
+            assert_eq!(
+                response.headers()[header::CONTENT_TYPE],
+                "text/html; charset=utf-8"
+            );
+            if status == StatusCode::RANGE_NOT_SATISFIABLE {
+                assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes */10");
+            }
+            let body = String::from_utf8(
+                to_bytes(response.into_body(), 16384)
+                    .await
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(body.contains("Назад"));
+            assert!(!body.contains("not valid JSON"));
+        }
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/storage")
+                    .header(header::ACCEPT, "text/html")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = String::from_utf8(
+            to_bytes(response.into_body(), 16384)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(body.contains("Access denied"));
+        let response = create_router(app)
+            .oneshot(
+                Request::builder()
+                    .uri("/unknown")
+                    .method("HEAD")
+                    .header(header::ACCEPT, "text/html")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(
+            to_bytes(response.into_body(), 16384)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

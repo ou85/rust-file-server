@@ -78,7 +78,8 @@ impl App {
         writeln!(output, "✓ Database:  {}", database_path.display())?;
         writeln!(output)?;
         writeln!(output, "→ Server online")?;
-        writeln!(output, "→ Listening on {blue}http://{addr}{reset}")
+        writeln!(output, "→ Listening on {blue}http://{addr}{reset}")?;
+        writeln!(output)
     }
 
     pub fn import_file(&self, path: &str) -> Result<FileMetadata, Box<dyn std::error::Error>> {
