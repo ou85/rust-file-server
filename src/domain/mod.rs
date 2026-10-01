@@ -20,3 +20,8 @@ pub struct LoginRequest {
     pub username: String,
     pub password: String,
 }
+
+#[derive(Deserialize)]
+pub struct BulkDeleteRequest {
+    pub ids: Vec<String>,
+}

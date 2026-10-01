@@ -1,6 +1,6 @@
 use crate::{
-    app::App, auth::UserRole, auth::authenticate, blob_store, domain::FileMetadata,
-    domain::LoginRequest,
+    app::App, auth::UserRole, auth::authenticate, blob_store, domain::BulkDeleteRequest,
+    domain::FileMetadata, domain::LoginRequest,
 };
 use axum::{
     Json, Router,
@@ -24,7 +24,7 @@ pub fn create_router(state: Arc<App>) -> Router {
         .route("/login", get(login_page))
         .route("/logout", post(logout))
         .route("/health", get(health))
-        .route("/files", get(list_files))
+        .route("/files", get(list_files).delete(delete_files))
         .route("/files/{id}", get(get_file))
         .route("/files/upload", post(upload_files))
         .layer(DefaultBodyLimit::disable())
@@ -156,6 +156,33 @@ async fn delete_file(
             )
         }
     }
+}
+
+async fn delete_files(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    Json(request): Json<BulkDeleteRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    require_user(&jar, &app)?;
+    if request.ids.is_empty() || request.ids.len() > 1_000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Provide between 1 and 1000 file IDs" })),
+        ));
+    }
+
+    let mut deleted = Vec::with_capacity(request.ids.len());
+    for id in request.ids {
+        app.delete_file(&id).map_err(|error| {
+            tracing::error!("bulk delete failed for {id}: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Could not delete selected files" })),
+            )
+        })?;
+        deleted.push(id);
+    }
+    Ok(Json(json!({ "deleted": deleted })))
 }
 
 async fn download_file(

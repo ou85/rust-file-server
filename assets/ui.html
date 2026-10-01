@@ -212,6 +212,17 @@
         .file-search::placeholder { color: #777; }
         .file-search:focus-visible, .file-sort:focus-visible { outline: 2px solid #75c995; outline-offset: 1px; }
         .file-sort { width: 180px; padding: 0 10px; }
+        .selection-toolbar { display: none; align-items: center; gap: 8px; margin-top: 12px; min-height: 36px; }
+        .selection-toolbar.visible { display: flex; }
+        .selection-count, .selection-action { height: 34px; border: 1px solid #d0d0d0; border-radius: 8px; background: #fff; color: #222; font: inherit; font-size: 13px; }
+        .selection-count { padding: 0 11px; background: #efefed; }
+        .selection-action { min-width: 34px; padding: 0 10px; cursor: pointer; }
+        .selection-action:hover { background: #f2f2f2; border-color: #b9b9b5; }
+        .selection-delete:hover { color: #c73d3d; border-color: #d85b5b; background: #fff7f7; }
+        .file-checkbox { width: 20px; height: 20px; margin: 0; accent-color: #65db91; cursor: pointer; vertical-align: middle; }
+        tr.selected-row td { background: #efefed; }
+        th:first-child, td:first-child { width: 36px; padding-right: 2px; }
+        td.file-name { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
         table { margin-top: 22px; border: 0; border-radius: 0; box-shadow: none; }
         th, td { padding: 14px 10px; border-bottom: 1px solid #e5e5e2; }
         th { background: transparent; color: #858585; font-size: 13px; font-weight: 400; }
@@ -264,15 +275,23 @@
             <option value="oldest">Oldest uploaded</option>
         </select>
     </div>
+    <div class="selection-toolbar" id="selectionToolbar">
+        <span class="selection-count" id="selectionCount"></span>
+        <button type="button" class="selection-action" onclick="downloadSelected()" aria-label="Download selected files">↓</button>
+        <button type="button" class="selection-action selection-delete" onclick="deleteSelected()" aria-label="Delete selected files">🗑</button>
+    </div>
     <table id="files"></table>
     </section>
     </main>
     <script>
         let allFiles = [];
+        const selectedIds = new Set();
 
         async function load() {
             const res = await fetch('/files');
             allFiles = await res.json();
+            const currentIds = new Set(allFiles.map(file => file.id));
+            [...selectedIds].forEach(id => { if (!currentIds.has(id)) selectedIds.delete(id); });
             renderFiles();
         }
 
@@ -293,15 +312,30 @@
             const table = document.getElementById('files');
             table.replaceChildren();
             const headerRow = document.createElement('tr');
-            ['Name', 'Size', 'Date', 'Actions'].forEach(text => {
+            const selectAllHeader = document.createElement('th');
+            const selectAll = document.createElement('input');
+            selectAll.type = 'checkbox'; selectAll.className = 'file-checkbox'; selectAll.setAttribute('aria-label', 'Select visible files');
+            selectAll.checked = files.length > 0 && files.every(file => selectedIds.has(file.id));
+            selectAll.indeterminate = files.some(file => selectedIds.has(file.id)) && !selectAll.checked;
+            selectAll.addEventListener('change', () => {
+                files.forEach(file => selectAll.checked ? selectedIds.add(file.id) : selectedIds.delete(file.id));
+                renderFiles();
+            });
+            selectAllHeader.appendChild(selectAll); headerRow.appendChild(selectAllHeader);
+            ['Name', 'Date', 'Size', ''].forEach(text => {
                 const th = document.createElement('th'); th.textContent = text; headerRow.appendChild(th);
             });
             table.appendChild(headerRow);
             files.forEach(f => {
                 const row = document.createElement('tr');
-                const name = document.createElement('td'); name.textContent = f.filename; row.appendChild(name);
-                const size = document.createElement('td'); size.textContent = formatSize(f.size); row.appendChild(size);
+                row.classList.toggle('selected-row', selectedIds.has(f.id));
+                const selectCell = document.createElement('td');
+                const select = document.createElement('input'); select.type = 'checkbox'; select.className = 'file-checkbox'; select.checked = selectedIds.has(f.id); select.setAttribute('aria-label', `Select ${f.filename}`);
+                select.addEventListener('change', () => { select.checked ? selectedIds.add(f.id) : selectedIds.delete(f.id); renderFiles(); });
+                selectCell.appendChild(select); row.appendChild(selectCell);
+                const name = document.createElement('td'); name.className = 'file-name'; name.textContent = f.filename; row.appendChild(name);
                 const date = document.createElement('td'); date.textContent = formatDate(f.created_at); row.appendChild(date);
+                const size = document.createElement('td'); size.textContent = formatSize(f.size); row.appendChild(size);
                 const actions = document.createElement('td');
                 const actionsList = [];
                 if (canOpen(f.filename)) actionsList.push(['Open', () => openFile(f.id)]);
@@ -310,6 +344,24 @@
                     const button = document.createElement('button'); button.textContent = text; button.addEventListener('click', action); actions.appendChild(button);
                 });
                 row.appendChild(actions); table.appendChild(row);
+            });
+            renderSelectionToolbar();
+        }
+
+        function renderSelectionToolbar() {
+            const toolbar = document.getElementById('selectionToolbar');
+            const count = selectedIds.size;
+            toolbar.classList.toggle('visible', count > 0);
+            document.getElementById('selectionCount').textContent = `${count} ${count === 1 ? 'file' : 'files'}`;
+        }
+
+        function downloadSelected() {
+            [...selectedIds].forEach((id, index) => {
+                window.setTimeout(() => {
+                    const link = document.createElement('a');
+                    link.href = `/files/${encodeURIComponent(id)}/download`;
+                    link.download = ''; link.hidden = true; document.body.appendChild(link); link.click(); link.remove();
+                }, index * 150);
             });
         }
 
@@ -398,6 +450,26 @@
             performDelete(id);
         }
 
+        function deleteSelected() {
+            const ids = [...selectedIds];
+            if (ids.length === 0) return;
+            showConfirmModal(`Permanently delete ${ids.length} selected ${ids.length === 1 ? 'file' : 'files'}?`, () => performBulkDelete(ids));
+        }
+
+        async function performBulkDelete(ids) {
+            const response = await fetch('/files', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids })
+            });
+            if (!response.ok) {
+                alert('Could not delete selected files.');
+                return;
+            }
+            ids.forEach(id => selectedIds.delete(id));
+            load();
+        }
+
         async function performDelete(id) {
             await fetch('/files/' + id, { method: 'DELETE' });
             load();
@@ -461,7 +533,7 @@
                 uploadBtn.style.color = 'white';
 
                 setTimeout(() => {
-                    uploadBtn.textContent = 'Upload';
+                    uploadBtn.textContent = 'Upload selected files';
                     uploadBtn.style.backgroundColor = '';
                     uploadBtn.style.color = '';
                     uploadBtn.disabled = false;
