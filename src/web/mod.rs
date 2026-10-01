@@ -556,7 +556,38 @@ fn inline_safe(mime: &str, filename: &str) -> bool {
             | "application/pdf"
     ) || mime.starts_with("video/")
         || mime.starts_with("audio/")
-        || filename.to_ascii_lowercase().ends_with(".md")
+        || is_text_preview(filename, mime)
+}
+
+fn is_text_preview(filename: &str, mime: &str) -> bool {
+    let name = filename.to_ascii_lowercase();
+    matches!(
+        name.rsplit('.').next(),
+        Some(
+            "txt"
+                | "md"
+                | "markdown"
+                | "text"
+                | "log"
+                | "csv"
+                | "json"
+                | "xml"
+                | "yaml"
+                | "yml"
+                | "toml"
+                | "ini"
+                | "conf"
+        )
+    ) && matches!(
+        mime,
+        "text/plain"
+            | "text/markdown"
+            | "text/csv"
+            | "application/json"
+            | "application/xml"
+            | "text/xml"
+            | "application/octet-stream"
+    )
 }
 
 fn secure_file_headers(mime: &str, filename: &str, inline: bool) -> HeaderMap {
@@ -606,6 +637,9 @@ mod tests {
         assert!(inline_safe("application/pdf", "document.pdf"));
         assert!(inline_safe("image/svg+xml", "drawing.svg"));
         assert!(inline_safe("text/markdown", "README.md"));
+        assert!(inline_safe("text/plain", "notes.txt"));
+        assert!(inline_safe("application/json", "data.json"));
+        assert!(!inline_safe("text/html", "page.html"));
         assert!(!inline_safe("application/zip", "archive.zip"));
     }
 }
