@@ -244,6 +244,24 @@
         .files-table th:nth-child(4), .files-table td.file-size { text-align: right; }
         .files-table td button { width: 3.75rem; height: 2.125rem; min-width: 0; margin: 0; padding: .375rem .5rem; border: 1px solid #d0d0d0; border-radius: .5rem; background: #fff; color: #222; }
         .files-table td button:hover { filter: none; border-color: #b9b9b5; background: #f0f0f0; }
+        body.modal-open { overflow: hidden; }
+        .image-modal { display: none; position: fixed; inset: 0; z-index: 1100; align-items: center; justify-content: center; background: rgba(20, 20, 18, .9); }
+        .image-modal.active { display: flex; }
+        .image-modal-content { position: relative; width: min(92vw, 76rem); height: min(88vh, 52rem); display: flex; align-items: center; justify-content: center; }
+        .image-modal img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; }
+        .image-modal-toolbar { position: absolute; top: 0; left: 0; display: flex; gap: .5rem; }
+        .image-modal-button { min-width: 2.5rem; height: 2.25rem; padding: 0 .75rem; border: 1px solid #d0d0d0; border-radius: .5rem; background: rgba(255,255,255,.96); color: #222; font: inherit; cursor: pointer; }
+        .image-modal-button:hover { background: #f0f0f0; }
+        .image-modal-delete:hover { color: #c73d3d; border-color: #d85b5b; background: #fff7f7; }
+        .image-modal-close { position: absolute; top: 0; right: 0; width: 2.5rem; min-width: 0; padding: 0; font-size: 1.5rem; line-height: 1; }
+        .image-modal-nav { position: fixed; top: 50%; width: 4rem; height: 7rem; transform: translateY(-50%); border: 0; background: transparent; cursor: pointer; }
+        .image-modal-prev { left: 0; }
+        .image-modal-next { right: 0; }
+        .image-modal-nav::before { content: ""; position: absolute; top: 50%; width: 1.5rem; height: 1.5rem; border-color: #fff; border-style: solid; border-width: .18rem 0 0 .18rem; }
+        .image-modal-prev::before { left: 1.5rem; transform: translateY(-50%) rotate(-45deg); }
+        .image-modal-next::before { right: 1.5rem; transform: translateY(-50%) rotate(135deg); }
+        .image-modal-nav:hover::before { border-color: #65db91; }
+        .image-modal-caption { position: absolute; bottom: 0; left: 50%; max-width: 70%; transform: translateX(-50%); overflow: hidden; color: #fff; font-size: .875rem; text-overflow: ellipsis; white-space: nowrap; }
         @media (max-width: 620px) { body { padding: 1.25rem 1rem 2.25rem; } .status-card, .files-card { padding: 1.125rem; } .file-toolbar { gap: .5rem; margin-top: 4rem; } .file-sort { width: 9.375rem; } .files-table th, .files-table td { padding-left: .375rem; padding-right: .375rem; } .files-table th:first-child, .files-table td:first-child { width: 2rem; } .files-table th:nth-child(4), .files-table td:nth-child(4) { display: table-cell !important; width: 5rem; } .files-table th:last-child, .files-table td:last-child { width: 4.75rem; padding-left: 0; padding-right: 0; text-align: center; } }
         @media (max-width: 480px) { .files-table th:nth-child(3), .files-table td:nth-child(3) { display: none; } }
     </style>
@@ -298,6 +316,21 @@
     <table id="files" class="files-table"></table>
     </section>
     </main>
+
+    <div class="image-modal" id="imageModal" role="dialog" aria-modal="true" aria-label="Image preview">
+        <button type="button" class="image-modal-nav image-modal-prev" onclick="navigateImage(-1)" aria-label="Previous image"></button>
+        <div class="image-modal-content">
+            <div class="image-modal-toolbar">
+                <button type="button" class="image-modal-button" onclick="downloadCurrentImage()">Download</button>
+                <button type="button" class="image-modal-button image-modal-delete" onclick="deleteCurrentImage()">Delete</button>
+            </div>
+            <button type="button" class="image-modal-button image-modal-close" onclick="closeImageModal()" aria-label="Close image preview">×</button>
+            <img id="imageModalImage" alt="">
+            <div class="image-modal-caption" id="imageModalCaption"></div>
+        </div>
+        <button type="button" class="image-modal-nav image-modal-next" onclick="navigateImage(1)" aria-label="Next image"></button>
+    </div>
+
     <script>
         let allFiles = [];
         const selectedIds = new Set();
@@ -441,7 +474,75 @@
         // });
 
 
+        let imagePreviewFiles = [];
+        let imagePreviewIndex = 0;
+
+        function isRasterImage(filename) {
+            return /\.(png|jpe?g|gif|webp|avif|bmp)$/.test(filename.toLowerCase());
+        }
+
+        function showImageModal(id) {
+            imagePreviewFiles = allFiles.filter(file => isRasterImage(file.filename));
+            imagePreviewIndex = imagePreviewFiles.findIndex(file => file.id === id);
+            if (imagePreviewIndex < 0) return;
+            updateImageModal();
+            document.getElementById('imageModal').classList.add('active');
+            document.body.classList.add('modal-open');
+        }
+
+        function updateImageModal() {
+            const file = imagePreviewFiles[imagePreviewIndex];
+            if (!file) return;
+            const image = document.getElementById('imageModalImage');
+            image.src = `/files/${encodeURIComponent(file.id)}/open`;
+            image.alt = file.filename;
+            document.getElementById('imageModalCaption').textContent = `${file.filename} · ${formatSize(file.size)}`;
+        }
+
+        function closeImageModal() {
+            document.getElementById('imageModal').classList.remove('active');
+            document.body.classList.remove('modal-open');
+            document.getElementById('imageModalImage').removeAttribute('src');
+        }
+
+        function navigateImage(direction) {
+            if (!imagePreviewFiles.length) return;
+            imagePreviewIndex = (imagePreviewIndex + direction + imagePreviewFiles.length) % imagePreviewFiles.length;
+            updateImageModal();
+        }
+
+        function downloadCurrentImage() {
+            const file = imagePreviewFiles[imagePreviewIndex];
+            if (file) downloadFile(file.id);
+        }
+
+        function deleteCurrentImage() {
+            const file = imagePreviewFiles[imagePreviewIndex];
+            if (!file) return;
+            showConfirmModal(`Permanently delete ${file.filename}?`, async () => {
+                await performDelete(file.id);
+                closeImageModal();
+            });
+        }
+
+        document.addEventListener('keydown', event => {
+            if (!document.getElementById('imageModal').classList.contains('active')) return;
+            if (event.key === 'Escape' || event.key === ' ') { event.preventDefault(); closeImageModal(); }
+            if (event.key === 'ArrowLeft') { event.preventDefault(); navigateImage(-1); }
+            if (event.key === 'ArrowRight') { event.preventDefault(); navigateImage(1); }
+        });
+        document.getElementById('imageModal').addEventListener('wheel', event => {
+            if (!document.getElementById('imageModal').classList.contains('active')) return;
+            event.preventDefault();
+            navigateImage(event.deltaY > 0 ? 1 : -1);
+        }, { passive: false });
+
         async function openFile(id) {
+            const file = allFiles.find(item => item.id === id);
+            if (file && isRasterImage(file.filename)) {
+                showImageModal(id);
+                return;
+            }
             const url = '/files/' + id + '/open';
             const exists = await checkFileExists(id, url);
             if (!exists) {
