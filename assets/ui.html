@@ -196,6 +196,20 @@
         .upload-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
         .upload-button { width: auto; height: 38px; padding: 0 17px; border: 1px solid #2da35a; border-radius: 8px; background: #36c76b; color: #fff; }
         .upload-button:hover { background: #2eaf5d; border-color: #258d4b; }
+        .ready-queue { display: none; margin-top: 14px; padding: 14px; border: 1px solid #d8d8d5; border-radius: 11px; background: #fff; }
+        .ready-queue.visible { display: block; }
+        .queue-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 14px; font-weight: 700; }
+        .queue-clear, .queue-remove { border: 1px solid #d0d0d0; border-radius: 8px; background: #fff; color: #222; cursor: pointer; }
+        .queue-clear { min-width: 48px; height: 32px; }
+        .queue-clear:hover, .queue-remove:hover { border-color: #d85b5b; color: #c73d3d; background: #fff7f7; }
+        .queue-list { display: flex; flex-direction: column; gap: 6px; max-height: 360px; overflow-y: auto; }
+        .queue-item { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 8px; background: #f5f5f3; }
+        .queue-file-info { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+        .queue-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
+        .queue-file-size { flex: none; color: #777; font-size: 12px; }
+        .queue-remove { flex: none; height: 32px; padding: 0 10px; }
+        .queue-upload { width: 100%; height: 38px; margin-top: 12px; border: 1px solid #348b50; border-radius: 8px; background: #43a563; color: #fff; font-weight: 600; cursor: pointer; }
+        .queue-upload:hover { background: #378f54; }
         table { margin-top: 22px; border: 0; border-radius: 0; box-shadow: none; }
         th, td { padding: 14px 10px; border-bottom: 1px solid #e5e5e2; }
         th { background: transparent; color: #858585; font-size: 13px; font-weight: 400; }
@@ -227,8 +241,12 @@
                 <span class="drop-hint">or choose files to add them to the upload list</span>
                 <input type="file" id="file" class="file-input" multiple>
             </label>
-            <div class="upload-actions"><button type="submit" onclick="upload()" class="upload-button">Upload</button></div>
         </div>
+        <section class="ready-queue" id="readyQueue" aria-live="polite">
+            <div class="queue-header"><span>Ready to upload</span><button type="button" class="queue-clear" onclick="clearQueue()">Clear</button></div>
+            <div class="queue-list" id="queueList"></div>
+            <button type="button" class="queue-upload" onclick="upload()">Upload selected files</button>
+        </section>
     <div class="progress-container" id="progressContainer">
         <div class="progress-bar" id="progressBar"></div>
     </div>
@@ -268,8 +286,10 @@
             return /\.(pdf|svg|md|markdown|txt|text|log|csv|json|xml|yaml|yml|toml|ini|conf|png|jpe?g|gif|webp|avif|mp4|webm|mov|m4v|mp3|wav|ogg|flac)$/.test(name);
         }
 
+        let pendingFiles = [];
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('file');
+        fileInput.addEventListener('change', () => addFiles(fileInput.files));
         ['dragenter', 'dragover'].forEach(eventName => dropZone.addEventListener(eventName, event => {
             event.preventDefault(); dropZone.classList.add('drag-over');
         }));
@@ -277,8 +297,35 @@
             event.preventDefault(); dropZone.classList.remove('drag-over');
         }));
         dropZone.addEventListener('drop', event => {
-            if (event.dataTransfer.files.length) fileInput.files = event.dataTransfer.files;
+            if (event.dataTransfer.files.length) addFiles(event.dataTransfer.files);
         });
+
+        function addFiles(files) {
+            for (const file of files) {
+                const duplicate = pendingFiles.some(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified);
+                if (!duplicate) pendingFiles.push(file);
+            }
+            renderQueue();
+        }
+
+        function renderQueue() {
+            const queue = document.getElementById('readyQueue');
+            const list = document.getElementById('queueList');
+            list.replaceChildren();
+            queue.classList.toggle('visible', pendingFiles.length > 0);
+            pendingFiles.forEach((file, index) => {
+                const row = document.createElement('div'); row.className = 'queue-item';
+                const info = document.createElement('div'); info.className = 'queue-file-info';
+                const name = document.createElement('span'); name.className = 'queue-file-name'; name.textContent = file.name;
+                const size = document.createElement('span'); size.className = 'queue-file-size'; size.textContent = formatSize(file.size);
+                info.append(name, size);
+                const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'queue-remove'; remove.textContent = 'Remove'; remove.onclick = () => removeQueuedFile(index);
+                row.append(info, remove); list.appendChild(row);
+            });
+        }
+
+        function removeQueuedFile(index) { pendingFiles.splice(index, 1); renderQueue(); }
+        function clearQueue() { pendingFiles = []; fileInput.value = ''; renderQueue(); }
         // function openFile(id) { window.open('/files/' + id + '/open', '_blank'); }
         // function downloadFile(id) { window.location = '/files/' + id + '/download'; }
 
@@ -357,9 +404,9 @@
         }
 
         async function upload() {
-            const input = document.getElementById('file');
+            if (pendingFiles.length === 0) return;
             const form = new FormData();
-            for (const file of input.files) {
+            for (const file of pendingFiles) {
                 form.append('files', file);
             }
 
@@ -388,7 +435,7 @@
                     progressBar.style.width = '0%';
                 }, 2000);
 
-                input.value = '';
+                clearQueue();
                 load();
             } catch (error) {
                 uploadBtn.textContent = 'Upload';
