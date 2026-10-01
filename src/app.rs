@@ -23,13 +23,15 @@ pub struct App {
 }
 
 impl App {
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let config = Config::new();
+    pub fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
+        ensure_dir_exists(&config.data_dir)?;
+        ensure_dir_exists(&config.blobs_dir)?;
+        ensure_dir_exists(&config.tmp_dir)?;
 
-        ensure_dir_exists(&config.storage_path)?;
-        ensure_dir_exists(&config.database_path)?;
-
-        let storage = Arc::new(Storage::new(config.storage_path.clone())?);
+        let storage = Arc::new(Storage::new(
+            config.blobs_dir.clone(),
+            config.tmp_dir.clone(),
+        )?);
         let metadata = MetadataStore::new(&config)?;
         let crypto = Crypto::new(&config.encryption_key);
 
@@ -47,16 +49,14 @@ impl App {
         })
     }
 
-    pub fn print_banner(addr: &str, storage_path: &str, db_path: &str) {
+    pub fn print_banner(addr: &str, data_dir: &Path) {
         const BLUE: &str = "\x1b[36m";
         const RESET: &str = "\x1b[0m";
 
         println!("──────────────────────────────");
         println!("rust-file-server v{}", env!("CARGO_PKG_VERSION"));
         println!("──────────────────────────────");
-        println!("✓ Storage:   {}", storage_path);
-        println!("✓ Database:  {}", db_path);
-        // println!("✓ Database:  ready");
+        println!("✓ Data:      {}", data_dir.display());
         println!();
         println!("→ Server online");
         println!("→ Listening on {}http://{}{}", BLUE, addr, RESET);
@@ -150,5 +150,19 @@ fn ensure_dir_exists<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn Error>> {
         fs::create_dir_all(p)?;
         println!("Created directory: {}", p.display());
     }
+    set_owner_only_permissions(p)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_owner_only_permissions(path: &Path) -> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_owner_only_permissions(_path: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }

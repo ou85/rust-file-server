@@ -75,8 +75,16 @@ src/
 ## Running
 
 ```bash
-cargo run -- --relese   
+cargo run
 ```
+
+By default, the server listens on `0.0.0.0:3000` and stores all state in a `data/`
+directory next to the executable. Use `--local` to listen only on `127.0.0.1`.
+Use `--data-dir /path/to/data` to choose a state directory (or set `RFS_DATA_DIR`).
+
+For systemd or Alpine/OpenRC installations, set `--data-dir` to a persistent writable
+directory such as `/var/lib/rust-file-server`; no paths relative to the service working
+directory are required.
 
 ## Building
 

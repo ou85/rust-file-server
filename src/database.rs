@@ -9,9 +9,7 @@ pub struct MetadataStore {
 
 impl MetadataStore {
     pub fn new(config: &Config) -> Result<Self, Box<dyn std::error::Error>> {
-        let path = format!("{}/metadata.redb", config.database_path);
-
-        let db = Database::create(path)?;
+        let db = Database::create(&config.metadata_path)?;
 
         let write_txn = db.begin_write()?;
 

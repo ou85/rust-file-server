@@ -20,6 +20,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let args: Vec<String> = std::env::args().collect();
 
+    if matches!(args.get(1).map(String::as_str), Some("--help") | Some("-h")) {
+        println!("{}", config::usage());
+        return Ok(());
+    }
+
     match args.get(1).map(|s| s.as_str()) {
         Some("keygen") => {
             keygen::run(32);
@@ -28,19 +33,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             hashgen::run(None);
         }
         Some("demo") => {
-            let app = App::new()?;
+            let config = config::Config::from_args(&args[2..])?;
+            let app = App::new(config)?;
             app.demo("README.md")?;
         }
         _ => {
-            let state = Arc::new(App::new()?);
+            let config = config::Config::from_args(&args[1..])?;
+            let state = Arc::new(App::new(config)?);
             let router = create_router(state.clone());
-            let addr = config::new_port();
+            let addr = state.config.bind_address.clone();
             let listener = tokio::net::TcpListener::bind(&addr).await?;
-            app::App::print_banner(
-                &addr,
-                &state.config.storage_path,
-                &state.config.database_path,
-            );
+            app::App::print_banner(&addr, &state.config.data_dir);
             axum::serve(listener, router).await?;
         }
     }

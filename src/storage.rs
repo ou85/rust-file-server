@@ -1,5 +1,8 @@
 use crate::{crypto::Crypto, models::StoredFile};
-use std::{fs, io, path::Path};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 /// Iterator over decrypted chunks for a byte range.
 /// Skips chunks before the range, decrypts only what's needed.
@@ -59,18 +62,27 @@ impl Iterator for RangeChunkIterator {
     }
 }
 pub struct Storage {
-    root_path: String,
+    root_path: PathBuf,
+    tmp_path: PathBuf,
 }
 
 impl Storage {
-    pub fn new(root_path: String) -> io::Result<Self> {
+    pub fn new(root_path: PathBuf, tmp_path: PathBuf) -> io::Result<Self> {
         fs::create_dir_all(&root_path)?;
+        fs::create_dir_all(&tmp_path)?;
         println!("\n=== Storage initialized");
-        Ok(Self { root_path })
+        Ok(Self {
+            root_path,
+            tmp_path,
+        })
     }
 
-    fn file_path(&self, id: &str) -> String {
-        format!("{}/{}", self.root_path, id)
+    fn file_path(&self, id: &str) -> PathBuf {
+        self.root_path.join(id)
+    }
+
+    fn tmp_file_path(&self, id: &str) -> PathBuf {
+        self.tmp_path.join(format!("{id}.partial"))
     }
 
     /// Saves the file in chunks - each chunk is encrypted separately
@@ -166,13 +178,13 @@ impl Storage {
     }
 
     pub fn create_file_writer(&self, id: &str) -> io::Result<std::fs::File> {
-        let path = self.file_path(&format!("{}.tmp", id));
+        let path = self.tmp_file_path(id);
         Ok(std::fs::File::create(path)?)
     }
 
     /// Renames the temporary file to the final file after successful writing and saving of metadata.
     pub fn finalize_file(&self, id: &str) -> io::Result<()> {
-        let tmp_path = self.file_path(&format!("{}.tmp", id));
+        let tmp_path = self.tmp_file_path(id);
         let final_path = self.file_path(id);
         fs::rename(tmp_path, final_path)?;
         Ok(())
@@ -180,7 +192,7 @@ impl Storage {
 
     /// Deletes the .tmp file in case of an error (rollback).
     pub fn cleanup_tmp_file(&self, id: &str) {
-        let tmp_path = self.file_path(&format!("{}.tmp", id));
+        let tmp_path = self.tmp_file_path(id);
         let _ = fs::remove_file(tmp_path);
     }
 
@@ -188,11 +200,11 @@ impl Storage {
     pub fn cleanup_all_tmp_files(&self) -> io::Result<usize> {
         let mut removed = 0;
 
-        for entry in fs::read_dir(&self.root_path)? {
+        for entry in fs::read_dir(&self.tmp_path)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().to_string();
 
-            if name.ends_with(".tmp") {
+            if name.ends_with(".partial") {
                 if fs::remove_file(entry.path()).is_ok() {
                     removed += 1;
                     println!("=== Removed orphaned tmp file: {}", name);
@@ -208,11 +220,11 @@ impl Storage {
         let mut removed = 0;
         let max_age = std::time::Duration::from_secs(max_age_secs);
 
-        for entry in fs::read_dir(&self.root_path)? {
+        for entry in fs::read_dir(&self.tmp_path)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().to_string();
 
-            if name.ends_with(".tmp") {
+            if name.ends_with(".partial") {
                 if let Ok(metadata) = entry.metadata() {
                     if let Ok(modified) = metadata.modified() {
                         if let Ok(elapsed) = modified.elapsed() {
