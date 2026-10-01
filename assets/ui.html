@@ -208,11 +208,18 @@
         .queue-upload { width: 100%; height: 38px; margin-top: 12px; border: 1px solid #348b50; border-radius: 8px; background: #43a563; color: #fff; font-weight: 600; cursor: pointer; }
         .queue-upload:hover { background: #378f54; }
         .file-toolbar { display: flex; gap: 12px; margin-top: 48px; }
-        .file-search, .file-sort { height: 38px; border: 1px solid #c8c8c8; border-radius: 8px; background: #fff; color: #222; font: inherit; font-size: 14px; }
+        .file-search, .file-sort, .file-page-size { height: 38px; border: 1px solid #c8c8c8; border-radius: 8px; background: #fff; color: #222; font: inherit; font-size: 14px; }
         .file-search { min-width: 0; flex: 1; padding: 0 12px; }
         .file-search::placeholder { color: #777; }
-        .file-search:focus-visible, .file-sort:focus-visible { outline: 2px solid #75c995; outline-offset: 1px; }
+        .file-search:focus-visible, .file-sort:focus-visible, .file-page-size:focus-visible { outline: 2px solid #75c995; outline-offset: 1px; }
         .file-sort { width: 180px; padding: 0 10px; }
+        .file-page-size { width: 112px; padding: 0 8px; }
+        .pagination { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: .375rem; margin: 1rem 0 1.25rem; }
+        .pagination button { min-width: 2.25rem; height: 2.25rem; padding: 0 .625rem; border: 1px solid #d0d0d0; border-radius: .5rem; background: #fff; color: #222; font: inherit; cursor: pointer; }
+        .pagination button:hover:not(:disabled):not(.current) { background: #f0f0f0; border-color: #b9b9b5; }
+        .pagination button.current { border-color: #348b50; background: #edf9f1; color: #176b34; font-weight: 600; }
+        .pagination button:disabled { color: #999; cursor: default; }
+        .pagination-ellipsis { padding: 0 .2rem; color: #777; }
         .selection-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 12px; min-height: 36px; visibility: hidden; opacity: 0; pointer-events: none; transition: opacity .12s ease; }
         .selection-toolbar.visible { visibility: visible; opacity: 1; pointer-events: auto; }
         .selection-count, .selection-action { height: 34px; border: 1px solid #d0d0d0; border-radius: 8px; background: #fff; color: #222; font: inherit; font-size: 13px; }
@@ -264,7 +271,7 @@
         .image-modal-next::before { right: 1.5rem; transform: translateY(-50%) rotate(135deg); }
         .image-modal-nav:hover::before { border-color: #65db91; }
         .image-modal-caption { position: absolute; bottom: 0; left: 50%; max-width: 70%; transform: translateX(-50%); overflow: hidden; color: #fff; font-size: .875rem; text-overflow: ellipsis; white-space: nowrap; }
-        @media (max-width: 620px) { body { padding: 1.25rem 1rem 2.25rem; } .status-card, .files-card { padding: 1.125rem; } .file-toolbar { gap: .5rem; margin-top: 2rem; } .file-sort { width: 9.375rem; } .files-table th, .files-table td { padding-left: .375rem; padding-right: .375rem; } .files-table th:first-child, .files-table td:first-child { width: 2rem; } .files-table th:nth-child(4), .files-table td:nth-child(4) { display: table-cell !important; width: 5rem; } .files-table th:last-child, .files-table td:last-child { width: 4.75rem; padding-left: 0; padding-right: 0; text-align: center; } }
+        @media (max-width: 620px) { body { padding: 1.25rem 1rem 2.25rem; } .status-card, .files-card { padding: 1.125rem; } .file-toolbar { gap: .5rem; margin-top: 2rem; } .file-sort { width: 9.375rem; } .file-page-size { width: 6.25rem; } .files-table th, .files-table td { padding-left: .375rem; padding-right: .375rem; } .files-table th:first-child, .files-table td:first-child { width: 2rem; } .files-table th:nth-child(4), .files-table td:nth-child(4) { display: table-cell !important; width: 5rem; } .files-table th:last-child, .files-table td:last-child { width: 4.75rem; padding-left: 0; padding-right: 0; text-align: center; } }
         @media (max-width: 480px) { .files-table th:nth-child(3), .files-table td:nth-child(3) { display: none; } }
     </style>
 </head>
@@ -310,6 +317,11 @@
             <option value="size-asc">Smallest first</option>
             <option value="oldest">Oldest uploaded</option>
         </select>
+        <select class="file-page-size" id="filePageSize" aria-label="Files per page">
+            <option value="10">10 files</option>
+            <option value="20" selected>20 files</option>
+            <option value="50">50 files</option>
+        </select>
     </div>
     <div class="selection-toolbar" id="selectionToolbar">
         <button type="button" class="selection-count" onclick="clearSelection()" aria-label="Clear selected files"><span id="selectionCount"></span><span class="selection-dismiss" aria-hidden="true">×</span></button>
@@ -317,6 +329,7 @@
         <button type="button" class="selection-action selection-delete" onclick="deleteSelected()" aria-label="Delete selected files">🗑</button>
     </div>
     <table id="files" class="files-table"></table>
+    <nav class="pagination" id="pagination" aria-label="File pages"></nav>
     </section>
     </main>
 
@@ -337,13 +350,29 @@
     <script>
         let allFiles = [];
         const selectedIds = new Set();
+        let currentPage = 1;
+        let pageSize = 20;
+        let totalPages = 1;
+        let fileRequestId = 0;
 
-        async function load() {
-            const [filesRes] = await Promise.all([fetch('/files'), loadStorage()]);
-            allFiles = await filesRes.json();
-            const currentIds = new Set(allFiles.map(file => file.id));
-            [...selectedIds].forEach(id => { if (!currentIds.has(id)) selectedIds.delete(id); });
+        async function load(refreshStorage = false) {
+            const requestId = ++fileRequestId;
+            const search = document.getElementById('fileSearch').value.trim();
+            const sort = document.getElementById('fileSort').value;
+            const params = new URLSearchParams({ page: currentPage, per_page: pageSize, search, sort });
+            const filesPromise = fetch(`/files?${params}`);
+            const [filesRes] = refreshStorage
+                ? await Promise.all([filesPromise, loadStorage()])
+                : [await filesPromise];
+            if (requestId !== fileRequestId) return;
+            if (!filesRes.ok) throw new Error('Could not load files');
+            const result = await filesRes.json();
+            allFiles = result.files;
+            currentPage = result.page;
+            pageSize = result.per_page;
+            totalPages = Math.max(1, Math.ceil(result.total / pageSize));
             renderFiles();
+            renderPagination();
         }
 
         async function loadStorage() {
@@ -361,19 +390,7 @@
         }
 
         function renderFiles() {
-            const query = document.getElementById('fileSearch').value.trim().toLocaleLowerCase();
-            const sort = document.getElementById('fileSort').value;
-            const files = allFiles.filter(file => file.filename.toLocaleLowerCase().includes(query));
-            files.sort((left, right) => {
-                switch (sort) {
-                    case 'name-asc': return left.filename.localeCompare(right.filename);
-                    case 'name-desc': return right.filename.localeCompare(left.filename);
-                    case 'size-desc': return right.size - left.size;
-                    case 'size-asc': return left.size - right.size;
-                    case 'oldest': return left.created_at - right.created_at;
-                    default: return right.created_at - left.created_at;
-                }
-            });
+            const files = allFiles;
             const table = document.getElementById('files');
             table.replaceChildren();
             const headerRow = document.createElement('tr');
@@ -412,6 +429,37 @@
             renderSelectionToolbar();
         }
 
+        function renderPagination() {
+            const pagination = document.getElementById('pagination');
+            pagination.replaceChildren();
+            const addButton = (label, page, { disabled = false, current = false, aria = label } = {}) => {
+                const button = document.createElement('button');
+                button.type = 'button'; button.textContent = label; button.disabled = disabled;
+                button.setAttribute('aria-label', aria);
+                if (current) { button.className = 'current'; button.setAttribute('aria-current', 'page'); }
+                button.addEventListener('click', () => { if (!disabled && page !== currentPage) { currentPage = page; load(); } });
+                pagination.appendChild(button);
+            };
+            addButton('Previous', Math.max(1, currentPage - 1), { disabled: currentPage === 1, aria: 'Previous page' });
+            let pages;
+            if (totalPages <= 5) {
+                pages = Array.from({ length: totalPages }, (_, index) => index + 1);
+            } else {
+                const visible = new Set([1, 2, totalPages, currentPage - 1, currentPage, currentPage + 1]);
+                pages = [...visible].filter(page => page >= 1 && page <= totalPages).sort((a, b) => a - b);
+            }
+            let previous = 0;
+            for (const page of pages) {
+                if (page - previous > 1) {
+                    const ellipsis = document.createElement('span'); ellipsis.className = 'pagination-ellipsis'; ellipsis.textContent = '…';
+                    pagination.appendChild(ellipsis);
+                }
+                addButton(String(page), page, { current: page === currentPage, aria: `Page ${page}` });
+                previous = page;
+            }
+            addButton('Next', Math.min(totalPages, currentPage + 1), { disabled: currentPage === totalPages, aria: 'Next page' });
+        }
+
         function renderSelectionToolbar() {
             const toolbar = document.getElementById('selectionToolbar');
             const count = selectedIds.size;
@@ -434,8 +482,11 @@
             });
         }
 
-        document.getElementById('fileSearch').addEventListener('input', renderFiles);
-        document.getElementById('fileSort').addEventListener('change', renderFiles);
+        document.getElementById('fileSearch').addEventListener('input', () => { currentPage = 1; load(); });
+        document.getElementById('fileSort').addEventListener('change', () => { currentPage = 1; load(); });
+        document.getElementById('filePageSize').addEventListener('change', event => {
+            pageSize = Number(event.target.value); currentPage = 1; load();
+        });
 
         function canOpen(filename) {
             const name = filename.toLowerCase();
@@ -611,12 +662,12 @@
                 return;
             }
             ids.forEach(id => selectedIds.delete(id));
-            load();
+            load(true);
         }
 
         async function performDelete(id) {
             await fetch('/files/' + id, { method: 'DELETE' });
-            load();
+            load(true);
         }
 
         function uploadWithProgress(form) {
@@ -687,7 +738,7 @@
                 }, 2000);
 
                 clearQueue();
-                load();
+                load(true);
             } catch (error) {
                 uploadBtn.textContent = 'Upload selected files';
                 uploadBtn.disabled = false;
@@ -756,7 +807,7 @@
             }
         }
 
-        load();
+        load(true);
     </script>
 
     <div class="modal-overlay" id="confirmModal">

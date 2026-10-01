@@ -4,7 +4,7 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Multipart, Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect},
     routing::{delete, get, post},
@@ -22,6 +22,22 @@ struct StorageStats {
     used_bytes: u64,
     total_bytes: u64,
     available_bytes: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct FileListQuery {
+    page: Option<usize>,
+    per_page: Option<usize>,
+    search: Option<String>,
+    sort: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct FileListResponse {
+    files: Vec<FileMetadata>,
+    total: usize,
+    page: usize,
+    per_page: usize,
 }
 
 pub fn create_router(state: Arc<App>) -> Router {
@@ -166,13 +182,45 @@ async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> im
 async fn list_files(
     jar: CookieJar,
     State(app): State<Arc<App>>,
-) -> Result<Json<Vec<FileMetadata>>, (StatusCode, Json<serde_json::Value>)> {
+    Query(query): Query<FileListQuery>,
+) -> Result<Json<FileListResponse>, (StatusCode, Json<serde_json::Value>)> {
     if let Err(e) = require_user(&jar, &app) {
         return Err(e);
     }
 
     match app.list_files() {
-        Ok(files) => Ok(Json(files)),
+        Ok(mut files) => {
+            let search = query.search.unwrap_or_default().to_lowercase();
+            files.retain(|file| file.filename.to_lowercase().contains(&search));
+            match query.sort.as_deref().unwrap_or("recent") {
+                "name-asc" => {
+                    files.sort_by(|a, b| a.filename.to_lowercase().cmp(&b.filename.to_lowercase()))
+                }
+                "name-desc" => {
+                    files.sort_by(|a, b| b.filename.to_lowercase().cmp(&a.filename.to_lowercase()))
+                }
+                "size-desc" => files.sort_by(|a, b| b.size.cmp(&a.size)),
+                "size-asc" => files.sort_by(|a, b| a.size.cmp(&b.size)),
+                "oldest" => files.sort_by_key(|file| file.created_at),
+                _ => files.sort_by_key(|file| std::cmp::Reverse(file.created_at)),
+            }
+            let total = files.len();
+            let per_page = match query.per_page.unwrap_or(20) {
+                10 => 10,
+                50 => 50,
+                _ => 20,
+            };
+            let total_pages = total.div_ceil(per_page).max(1);
+            let page = query.page.unwrap_or(1).clamp(1, total_pages);
+            let start = (page - 1) * per_page;
+            let files = files.into_iter().skip(start).take(per_page).collect();
+            Ok(Json(FileListResponse {
+                files,
+                total,
+                page,
+                per_page,
+            }))
+        }
         Err(e) => {
             tracing::error!("list_files failed: {}", e);
             Err((
@@ -799,6 +847,41 @@ mod tests {
         assert!(stats["used_bytes"].as_u64().unwrap() >= 17);
         assert!(stats["total_bytes"].as_u64().unwrap() > 0);
         assert!(stats["available_bytes"].as_u64().unwrap() > 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn file_list_returns_requested_server_side_page() {
+        let (app, dir) = test_app();
+        for index in 0..23 {
+            app.metadata
+                .save_file(&FileMetadata {
+                    id: format!("id-{index}"),
+                    filename: format!("item-{index:02}.txt"),
+                    size: index,
+                    created_at: index,
+                })
+                .unwrap();
+        }
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/files?page=2&per_page=10&sort=name-asc&search=item-")
+                    .header("cookie", user_cookie(&app))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let result: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(result["total"], 23);
+        assert_eq!(result["page"], 2);
+        assert_eq!(result["per_page"], 10);
+        assert_eq!(result["files"].as_array().unwrap().len(), 10);
+        assert_eq!(result["files"][0]["filename"], "item-10.txt");
         fs::remove_dir_all(dir).unwrap();
     }
 
