@@ -329,6 +329,12 @@ async fn upload_files(
                 format!("IO error: {}", e),
             )
         })?;
+        file.sync_all().map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("IO sync error: {e}"),
+            )
+        })?;
 
         // Save metadata
         let metadata = crate::domain::FileMetadata {
@@ -341,20 +347,19 @@ async fn upload_files(
                 .as_secs(),
         };
 
-        // Save metadata. If it fails, delete the .tmp file (rollback).
-        if let Err(e) = app.metadata.save_file(&metadata) {
-            app.storage.cleanup_tmp_file(&id);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("DB error: {}", e),
-            ));
-        }
-
-        // Metadata saved successfully, renaming .tmp to the final file
+        // Publish only a fully synced encrypted file. Startup cleanup removes a blob
+        // if the process later crashes before its metadata transaction succeeds.
         if let Err(e) = app.storage.finalize_file(&id) {
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Finalize error: {}", e),
+            ));
+        }
+        if let Err(e) = app.metadata.save_file(&metadata) {
+            let _ = app.storage.delete_file(&id);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB error: {}", e),
             ));
         }
 

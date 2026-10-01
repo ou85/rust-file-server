@@ -16,6 +16,7 @@ impl MetadataStore {
         {
             let _table = write_txn.open_table(FILES)?;
         }
+        write_txn.commit()?;
 
         println!("=== Database initialized");
 

@@ -40,6 +40,16 @@ impl App {
             Ok(_) => {}
             Err(e) => eprintln!("=== Cleanup error: {}", e),
         }
+        let known_ids = metadata
+            .list_files()?
+            .into_iter()
+            .map(|file| file.id)
+            .collect();
+        match storage.cleanup_orphaned_files(&known_ids) {
+            Ok(count) if count > 0 => println!("=== Cleaned up {count} orphaned blobs"),
+            Ok(_) => {}
+            Err(e) => eprintln!("=== Orphan cleanup error: {e}"),
+        }
 
         Ok(Self {
             config,
@@ -73,8 +83,10 @@ impl App {
         };
 
         self.storage.save_file(&file, &self.crypto)?;
-
-        self.metadata.save_file(&metadata)?;
+        if let Err(error) = self.metadata.save_file(&metadata) {
+            let _ = self.storage.delete_file(&file.id);
+            return Err(error);
+        }
 
         Ok(metadata)
     }

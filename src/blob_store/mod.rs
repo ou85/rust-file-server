@@ -1,6 +1,7 @@
 use crate::{crypto::Crypto, domain::StoredFile};
 use aes_gcm::{Nonce, aead::Aead};
 use std::{
+    collections::HashSet,
     fs,
     io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -134,6 +135,24 @@ impl Storage {
         Ok(())
     }
 
+    /// Removes published blobs which have no metadata record after an interrupted upload.
+    pub fn cleanup_orphaned_files(&self, known_ids: &HashSet<String>) -> io::Result<usize> {
+        let mut removed = 0;
+        for entry in fs::read_dir(&self.root_path)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let id = entry.file_name().to_string_lossy().to_string();
+            if !known_ids.contains(&id) {
+                fs::remove_file(entry.path())?;
+                removed += 1;
+                println!("=== Removed orphaned blob: {id}");
+            }
+        }
+        Ok(removed)
+    }
+
     pub fn import_file(path: &str) -> io::Result<StoredFile> {
         let content = fs::read(path)?;
         let filename = Path::new(path)
@@ -191,7 +210,9 @@ impl Storage {
 
     pub fn create_file_writer(&self, id: &str) -> io::Result<std::fs::File> {
         let path = self.tmp_file_path(id);
-        Ok(std::fs::File::create(path)?)
+        let file = std::fs::File::create(path)?;
+        set_file_permissions(&file)?;
+        Ok(file)
     }
 
     /// Renames the temporary file to the final file after successful writing and saving of metadata.
@@ -200,12 +221,6 @@ impl Storage {
         let final_path = self.file_path(id);
         fs::rename(tmp_path, final_path)?;
         Ok(())
-    }
-
-    /// Deletes the .tmp file in case of an error (rollback).
-    pub fn cleanup_tmp_file(&self, id: &str) {
-        let tmp_path = self.tmp_file_path(id);
-        let _ = fs::remove_file(tmp_path);
     }
 
     /// Deletes ALL .tmp files (called at server startup).
@@ -254,6 +269,17 @@ impl Storage {
 
         Ok(removed)
     }
+}
+
+#[cfg(unix)]
+fn set_file_permissions(file: &fs::File) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn set_file_permissions(_file: &fs::File) -> io::Result<()> {
+    Ok(())
 }
 
 /// Iterator over decrypted chunks.
