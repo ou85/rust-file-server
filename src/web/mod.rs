@@ -732,6 +732,34 @@ fn percent_encode_filename(filename: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{auth::UserRole, config::Config};
+    use axum::{body::to_bytes, http::Request};
+    use std::{fs, path::PathBuf};
+    use tower::ServiceExt;
+
+    fn test_app() -> (Arc<App>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("rfs-web-test-{}", uuid::Uuid::new_v4()));
+        let config = Config {
+            blobs_dir: dir.join("blobs"),
+            tmp_dir: dir.join("tmp"),
+            metadata_path: dir.join("metadata.redb"),
+            data_dir: dir.clone(),
+            encryption_key: base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                [7u8; 32],
+            ),
+            user_name: "user".into(),
+            admin_name: "admin".into(),
+            user_password_hash: String::new(),
+            admin_password_hash: String::new(),
+            bind_address: "127.0.0.1:0".into(),
+        };
+        (Arc::new(App::new(config).unwrap()), dir)
+    }
+
+    fn user_cookie(app: &App) -> String {
+        format!("rfs_session={}", app.sessions.create(UserRole::User))
+    }
     #[test]
     fn parses_standard_open_and_suffix_ranges() {
         assert_eq!(parse_single_range(Some("bytes=2-5"), 10), Ok(Some((2, 5))));
@@ -749,5 +777,73 @@ mod tests {
         assert!(inline_safe("application/json", "data.json"));
         assert!(!inline_safe("text/html", "page.html"));
         assert!(!inline_safe("application/zip", "archive.zip"));
+    }
+
+    #[tokio::test]
+    async fn storage_reports_data_directory_usage() {
+        let (app, dir) = test_app();
+        fs::write(dir.join("sample.bin"), [1u8; 17]).unwrap();
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/storage")
+                    .header("cookie", user_cookie(&app))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let stats: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(stats["used_bytes"].as_u64().unwrap() >= 17);
+        assert!(stats["total_bytes"].as_u64().unwrap() > 0);
+        assert!(stats["available_bytes"].as_u64().unwrap() > 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn upload_and_delete_endpoints_change_file_list() {
+        let (app, dir) = test_app();
+        let boundary = "test-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"hello.txt\"\r\nContent-Type: text/plain\r\n\r\nhello rsfs\r\n--{boundary}--\r\n"
+        );
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/files/upload")
+                    .header("cookie", user_cookie(&app))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let uploaded: Vec<FileMetadata> =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(uploaded.len(), 1);
+        let id = uploaded[0].id.clone();
+
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/files/{id}"))
+                    .header("cookie", user_cookie(&app))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(app.list_files().unwrap().is_empty());
+        fs::remove_dir_all(dir).unwrap();
     }
 }
