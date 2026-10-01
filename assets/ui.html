@@ -224,14 +224,20 @@
         tr.selected-row td { background: #efefed; }
         th:first-child, td:first-child { width: 36px; padding-right: 2px; }
         td.file-name { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-        table { margin-top: 22px; border: 0; border-radius: 0; box-shadow: none; }
-        th, td { padding: 14px 10px; border-bottom: 1px solid #e5e5e2; }
-        th { background: transparent; color: #858585; font-size: 13px; font-weight: 400; }
-        td { font-size: 15px; }
-        td:first-child { font-weight: 600; }
-        td button { height: 34px; min-width: 0; margin: 0 0 0 5px; padding: 6px 11px; border: 1px solid #d0d0d0; border-radius: 8px; background: #fff; color: #222; }
-        td button:hover { filter: none; border-color: #b9b9b5; background: #f0f0f0; }
-        @media (max-width: 620px) { body { padding: 20px 16px 36px; } .status-card, .files-card { padding: 18px; } .file-toolbar { gap: 8px; margin-top: 64px; } .file-sort { width: 150px; } th, td { padding-left: 6px; padding-right: 6px; } td button { padding: 6px 8px; } }
+        .files-table { width: 100%; margin-top: 1.375rem; table-layout: fixed; border: 0; border-radius: 0; box-shadow: none; }
+        .files-table th, .files-table td { padding: .875rem .625rem; border-bottom: 1px solid #e5e5e2; }
+        .files-table th:first-child, .files-table td:first-child { width: 2.25rem; }
+        .files-table th:nth-child(2), .files-table td:nth-child(2) { width: auto; }
+        .files-table th:nth-child(3), .files-table td:nth-child(3) { width: 10rem; }
+        .files-table th:nth-child(4), .files-table td:nth-child(4) { width: 7rem; }
+        .files-table th:last-child, .files-table td:last-child { width: 4rem; padding-right: 0; text-align: right; }
+        .files-table th { background: transparent; color: #858585; font-size: .8125rem; font-weight: 400; }
+        .files-table td { font-size: .9375rem; }
+        .files-table td.file-name { font-weight: 600; }
+        .files-table td.file-date, .files-table td.file-size { color: #666; font-size: .875rem; white-space: nowrap; }
+        .files-table td button { width: 3.75rem; height: 2.125rem; min-width: 0; margin: 0; padding: .375rem .5rem; border: 1px solid #d0d0d0; border-radius: .5rem; background: #fff; color: #222; }
+        .files-table td button:hover { filter: none; border-color: #b9b9b5; background: #f0f0f0; }
+        @media (max-width: 620px) { body { padding: 1.25rem 1rem 2.25rem; } .status-card, .files-card { padding: 1.125rem; } .file-toolbar { gap: .5rem; margin-top: 4rem; } .file-sort { width: 9.375rem; } .files-table th, .files-table td { padding-left: .375rem; padding-right: .375rem; } .files-table th:nth-child(3), .files-table td:nth-child(3) { width: 8.5rem; } .files-table th:nth-child(4), .files-table td:nth-child(4) { width: 5.5rem; } .files-table th:last-child, .files-table td:last-child { width: 3.75rem; } }
     </style>
 </head>
 <body>
@@ -282,7 +288,7 @@
         <button type="button" class="selection-action" onclick="downloadSelected()" aria-label="Download selected files">↓</button>
         <button type="button" class="selection-action selection-delete" onclick="deleteSelected()" aria-label="Delete selected files">🗑</button>
     </div>
-    <table id="files"></table>
+    <table id="files" class="files-table"></table>
     </section>
     </main>
     <script>
@@ -336,9 +342,9 @@
                 select.addEventListener('change', () => { select.checked ? selectedIds.add(f.id) : selectedIds.delete(f.id); renderFiles(); });
                 selectCell.appendChild(select); row.appendChild(selectCell);
                 const name = document.createElement('td'); name.className = 'file-name'; name.textContent = f.filename; row.appendChild(name);
-                const date = document.createElement('td'); date.textContent = formatDate(f.created_at); row.appendChild(date);
-                const size = document.createElement('td'); size.textContent = formatSize(f.size); row.appendChild(size);
-                const actions = document.createElement('td');
+                const date = document.createElement('td'); date.className = 'file-date'; date.textContent = formatDate(f.created_at); row.appendChild(date);
+                const size = document.createElement('td'); size.className = 'file-size'; size.textContent = formatSize(f.size); row.appendChild(size);
+                const actions = document.createElement('td'); actions.className = 'file-actions';
                 const actionsList = [];
                 if (canOpen(f.filename)) actionsList.push(['Open', () => openFile(f.id)]);
                 actionsList.forEach(([text, action]) => {
