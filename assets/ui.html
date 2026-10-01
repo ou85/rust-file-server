@@ -230,15 +230,17 @@
         .selection-toolbar.visible { visibility: visible; opacity: 1; pointer-events: auto; }
         .selection-count, .selection-action { height: 34px; border: 1px solid #d0d0d0; border-radius: 8px; background: #fff; color: #222; font: inherit; font-size: 13px; }
         .selection-count { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-width: 5.25rem; height: 2.125rem; margin-right: 1rem; padding: 0 .6875rem; border: 1px solid #d0d0d0; border-radius: 1.0625rem; 
-            color: #222; font: inherit; font-size: .8125rem; cursor: pointer; }
-        .selection-count:hover { background: #e7e7e4; border-color: #b9b9b5; }
+            color: #222; font: inherit; font-size: .8125rem; cursor: pointer; transition: border-color .12s ease, box-shadow .12s ease, transform .08s ease; }
+        .selection-count:hover { background: #fff; border-color: #b9b9b5; box-shadow: 0 0 0 .125rem #eeeeec; }
         .selection-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; font-size: 1rem; line-height: 1; }
-        .selection-action { min-width: 34px; padding: 0 10px; cursor: pointer; }
-        .selection-action:hover { background: #f2f2f2; border-color: #b9b9b5; }
+        .selection-action { min-width: 34px; padding: 0 10px; cursor: pointer; transition: border-color .12s ease, box-shadow .12s ease, transform .08s ease; }
+        .selection-action:hover { background: #fff; border-color: #b9b9b5; box-shadow: 0 0 0 .125rem #eeeeec; }
+        .selection-count:active, .selection-action:active { transform: translateY(1px); }
+        .selection-count:focus-visible, .selection-action:focus-visible { outline: 2px solid #75c995; outline-offset: 2px; }
         .selection-delete { color: #222; border-color: #d0d0d0; }
-        .selection-delete:hover { color: #222; border-color: #b9b9b5; background: #f2f2f2; }
+        .selection-delete:hover { color: #222; border-color: rgba(217,48,37,.58); background: #fff; box-shadow: 0 0 0 .125rem rgba(217,48,37,.28); }
         .selection-download { color: #222; border-color: #d0d0d0; }
-        .selection-download:hover { color: #222; border-color: #b9b9b5; background: #f2f2f2; }
+        .selection-download:hover { color: #222; border-color: #65db91; background: #fff; box-shadow: 0 0 0 .125rem rgba(101,219,145,.55); }
         .selection-animated-icon { display: block; width: 1.25rem; height: 1.25rem; object-fit: contain; }
         .file-checkbox { width: 20px; height: 20px; margin: 0; accent-color: #65db91; cursor: pointer; vertical-align: middle; }
         tr.selected-row td { background: #efefed; }
