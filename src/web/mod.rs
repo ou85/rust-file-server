@@ -72,11 +72,31 @@ async fn storage_stats(
     let block_size = stats.f_frsize as u64;
     let total_bytes = (stats.f_blocks as u64).saturating_mul(block_size);
     let available_bytes = (stats.f_bavail as u64).saturating_mul(block_size);
+    let used_bytes = directory_size(&app.config.data_dir).map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("Could not measure data directory: {error}")})),
+        )
+    })?;
     Ok(Json(StorageStats {
-        used_bytes: total_bytes.saturating_sub(available_bytes),
+        used_bytes,
         total_bytes,
         available_bytes,
     }))
+}
+
+fn directory_size(path: &std::path::Path) -> std::io::Result<u64> {
+    let mut total: u64 = 0;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if metadata.is_dir() {
+            total = total.saturating_add(directory_size(&entry.path())?);
+        } else if metadata.is_file() {
+            total = total.saturating_add(metadata.len());
+        }
+    }
+    Ok(total)
 }
 
 pub async fn root(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoResponse {
