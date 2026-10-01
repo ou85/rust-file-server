@@ -232,13 +232,14 @@
         .selection-count { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-width: 5.25rem; height: 2.125rem; margin-right: 1rem; padding: 0 .6875rem; border: 1px solid #d0d0d0; border-radius: 1.0625rem; 
             color: #222; font: inherit; font-size: .8125rem; cursor: pointer; }
         .selection-count:hover { background: #e7e7e4; border-color: #b9b9b5; }
-        .selection-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; border: 1px solid #b9b9b5; border-radius: 50%; font-size: 1rem; line-height: 1; }
+        .selection-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; font-size: 1rem; line-height: 1; }
         .selection-action { min-width: 34px; padding: 0 10px; cursor: pointer; }
         .selection-action:hover { background: #f2f2f2; border-color: #b9b9b5; }
-        .selection-delete:hover { color: #c73d3d; border-color: #d85b5b; background: #fff7f7; }
-        .selection-delete { color: #c73d3d; border-color: #d85b5b; }
-        .selection-download { color: #348b50; border-color: #65b87d; font-size: 1.15rem; font-weight: 700; line-height: 1; }
-        .selection-download:hover { color: #26733e; border-color: #348b50; background: #edf9f1; }
+        .selection-delete { color: #222; border-color: #d0d0d0; }
+        .selection-delete:hover { color: #222; border-color: #b9b9b5; background: #f2f2f2; }
+        .selection-download { color: #222; border-color: #d0d0d0; }
+        .selection-download:hover { color: #222; border-color: #b9b9b5; background: #f2f2f2; }
+        .selection-animated-icon { display: block; width: 1.25rem; height: 1.25rem; object-fit: contain; }
         .file-checkbox { width: 20px; height: 20px; margin: 0; accent-color: #65db91; cursor: pointer; vertical-align: middle; }
         tr.selected-row td { background: #efefed; }
         th:first-child, td:first-child { width: 36px; padding-right: 2px; }
@@ -330,9 +331,9 @@
         </select>
     </div>
     <div class="selection-toolbar" id="selectionToolbar">
-        <button type="button" class="selection-count" onclick="clearSelection()" aria-label="Clear selected files"><span id="selectionCount"></span><span class="selection-dismiss" aria-hidden="true">×</span></button>
-        <button type="button" class="selection-action selection-download" onclick="downloadSelected()" aria-label="Download selected files">↓</button>
-        <button type="button" class="selection-action selection-delete" onclick="deleteSelected()" aria-label="Delete selected files">🗑</button>
+        <button type="button" class="selection-count" onclick="clearSelection()" aria-label="Clear selected files"><span id="selectionCount"></span><span class="selection-dismiss" aria-hidden="true"><img class="selection-animated-icon" src="/assets/icons/cancel-static.png" data-static-src="/assets/icons/cancel-static.png" data-animated-src="/assets/icons/cancel-48.gif" alt=""></span></button>
+        <button type="button" class="selection-action selection-download" onclick="downloadSelected()" aria-label="Download selected files"><img class="selection-animated-icon" src="/assets/icons/download-48-static.png" data-static-src="/assets/icons/download-48-static.png" data-animated-src="/assets/icons/download-48.gif" alt=""></button>
+        <button type="button" class="selection-action selection-delete" onclick="deleteSelected()" aria-label="Delete selected files"><img class="selection-animated-icon" src="/assets/icons/trash-static.png" data-static-src="/assets/icons/trash-static.png" data-animated-src="/assets/icons/trash-48.gif" alt=""></button>
     </div>
     <table id="files" class="files-table"></table>
     <nav class="pagination" id="pagination" aria-label="File pages"></nav>
@@ -343,7 +344,7 @@
         <button type="button" class="image-modal-nav image-modal-prev" onclick="navigateImage(-1)" aria-label="Previous image"></button>
         <div class="image-modal-content">
             <div class="image-modal-toolbar">
-                <button type="button" class="image-modal-button" onclick="downloadCurrentImage()" aria-label="Download" title="Download"><img src="/assets/icons/download.png" alt=""></button>
+                <button type="button" class="image-modal-button" id="downloadCurrentImageButton" onclick="downloadCurrentImage()" aria-label="Download" title="Download"><img src="/assets/icons/download.png" alt=""></button>
                 <button type="button" class="image-modal-button image-modal-delete" onclick="deleteCurrentImage()" aria-label="Delete" title="Delete"><img src="/assets/icons/delete.png" alt=""></button>
             </div>
             <button type="button" class="image-modal-button image-modal-close" onclick="closeImageModal()" aria-label="Close image preview"><img src="/assets/icons/cancel.png" alt=""></button>
@@ -493,6 +494,15 @@
         document.getElementById('fileSort').addEventListener('change', () => { currentPage = 1; load(); });
         document.getElementById('filePageSize').addEventListener('change', event => {
             pageSize = Number(event.target.value); currentPage = 1; load();
+        });
+        document.querySelectorAll('#selectionToolbar .selection-count, #selectionToolbar .selection-download, #selectionToolbar .selection-delete').forEach(button => {
+            const icon = button.querySelector('.selection-animated-icon');
+            const showAnimation = () => { icon.src = icon.dataset.animatedSrc; };
+            const showStatic = () => { icon.src = icon.dataset.staticSrc; };
+            button.addEventListener('mouseenter', showAnimation);
+            button.addEventListener('mouseleave', showStatic);
+            button.addEventListener('focus', showAnimation);
+            button.addEventListener('blur', showStatic);
         });
 
         function canOpen(filename) {

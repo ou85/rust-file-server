@@ -70,10 +70,43 @@ async fn icon(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     require_user(&jar, &app)?;
-    let bytes = match name.as_str() {
-        "cancel.png" => include_bytes!("../../assets/icons/cancel.png").as_slice(),
-        "delete.png" => include_bytes!("../../assets/icons/delete.png").as_slice(),
-        "download.png" => include_bytes!("../../assets/icons/download.png").as_slice(),
+    let (bytes, content_type) = match name.as_str() {
+        "cancel.png" => (
+            include_bytes!("../../assets/icons/cancel.png").as_slice(),
+            "image/png",
+        ),
+        "delete.png" => (
+            include_bytes!("../../assets/icons/delete.png").as_slice(),
+            "image/png",
+        ),
+        "download.png" => (
+            include_bytes!("../../assets/icons/download.png").as_slice(),
+            "image/png",
+        ),
+        "cancel-48.gif" => (
+            include_bytes!("../../assets/icons/cancel-48.gif").as_slice(),
+            "image/gif",
+        ),
+        "cancel-static.png" => (
+            include_bytes!("../../assets/icons/cancel-static.png").as_slice(),
+            "image/png",
+        ),
+        "trash-48.gif" => (
+            include_bytes!("../../assets/icons/trash-48.gif").as_slice(),
+            "image/gif",
+        ),
+        "trash-static.png" => (
+            include_bytes!("../../assets/icons/trash-static.png").as_slice(),
+            "image/png",
+        ),
+        "download-48.gif" => (
+            include_bytes!("../../assets/icons/download-48.gif").as_slice(),
+            "image/gif",
+        ),
+        "download-48-static.png" => (
+            include_bytes!("../../assets/icons/download-48-static.png").as_slice(),
+            "image/png",
+        ),
         _ => {
             return Err((
                 StatusCode::NOT_FOUND,
@@ -81,7 +114,7 @@ async fn icon(
             ));
         }
     };
-    Ok(([(header::CONTENT_TYPE, "image/png")], bytes))
+    Ok(([(header::CONTENT_TYPE, content_type)], bytes))
 }
 
 async fn storage_stats(
