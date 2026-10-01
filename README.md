@@ -174,7 +174,7 @@ cargo build --release --target x86_64-unknown-linux-musl
 strip target/x86_64-unknown-linux-musl/release/rust-file-server
 ```
 
-- for aarch64
+- for aarch64 
 
 ```bash
 cargo zigbuild --release --target aarch64-unknown-linux-musl
