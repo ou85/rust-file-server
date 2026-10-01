@@ -220,6 +220,12 @@
         .pagination button.current { border-color: #348b50; background: #edf9f1; color: #176b34; font-weight: 600; }
         .pagination button:disabled { color: #999; cursor: default; }
         .pagination-ellipsis { padding: 0 .2rem; color: #777; }
+        .pagination button.page-prev, .pagination button.page-next { position: relative; min-width: 2.25rem; padding: 0; color: transparent; font-size: 0; }
+        .pagination button.page-prev::before, .pagination button.page-next::before { content: ""; position: absolute; top: 50%; left: 50%; width: .55rem; height: .55rem; border-color: #555; border-style: solid; border-width: .12rem 0 0 .12rem; }
+        .pagination button.page-prev::before { transform: translate(-35%, -50%) rotate(-45deg); }
+        .pagination button.page-next::before { transform: translate(-65%, -50%) rotate(135deg); }
+        .pagination button.page-prev:hover:not(:disabled)::before, .pagination button.page-next:hover:not(:disabled)::before { border-color: #222; }
+        .pagination button.page-prev:disabled::before, .pagination button.page-next:disabled::before { border-color: #aaa; }
         .selection-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 12px; min-height: 36px; visibility: hidden; opacity: 0; pointer-events: none; transition: opacity .12s ease; }
         .selection-toolbar.visible { visibility: visible; opacity: 1; pointer-events: auto; }
         .selection-count, .selection-action { height: 34px; border: 1px solid #d0d0d0; border-radius: 8px; background: #fff; color: #222; font: inherit; font-size: 13px; }
@@ -432,15 +438,16 @@
         function renderPagination() {
             const pagination = document.getElementById('pagination');
             pagination.replaceChildren();
-            const addButton = (label, page, { disabled = false, current = false, aria = label } = {}) => {
+            const addButton = (label, page, { disabled = false, current = false, aria = label, className = '' } = {}) => {
                 const button = document.createElement('button');
                 button.type = 'button'; button.textContent = label; button.disabled = disabled;
+                button.className = className;
                 button.setAttribute('aria-label', aria);
                 if (current) { button.className = 'current'; button.setAttribute('aria-current', 'page'); }
                 button.addEventListener('click', () => { if (!disabled && page !== currentPage) { currentPage = page; load(); } });
                 pagination.appendChild(button);
             };
-            addButton('Previous', Math.max(1, currentPage - 1), { disabled: currentPage === 1, aria: 'Previous page' });
+            addButton('‹', Math.max(1, currentPage - 1), { disabled: currentPage === 1, aria: 'Previous page', className: 'page-prev' });
             let pages;
             if (totalPages <= 5) {
                 pages = Array.from({ length: totalPages }, (_, index) => index + 1);
@@ -457,7 +464,7 @@
                 addButton(String(page), page, { current: page === currentPage, aria: `Page ${page}` });
                 previous = page;
             }
-            addButton('Next', Math.min(totalPages, currentPage + 1), { disabled: currentPage === totalPages, aria: 'Next page' });
+            addButton('›', Math.min(totalPages, currentPage + 1), { disabled: currentPage === totalPages, aria: 'Next page', className: 'page-next' });
         }
 
         function renderSelectionToolbar() {
