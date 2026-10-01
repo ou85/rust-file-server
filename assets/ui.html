@@ -212,13 +212,14 @@
         .file-search::placeholder { color: #777; }
         .file-search:focus-visible, .file-sort:focus-visible { outline: 2px solid #75c995; outline-offset: 1px; }
         .file-sort { width: 180px; padding: 0 10px; }
-        .selection-toolbar { display: none; align-items: center; gap: 8px; margin-top: 12px; min-height: 36px; }
-        .selection-toolbar.visible { display: flex; }
+        .selection-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 12px; min-height: 36px; visibility: hidden; opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+        .selection-toolbar.visible { visibility: visible; opacity: 1; pointer-events: auto; }
         .selection-count, .selection-action { height: 34px; border: 1px solid #d0d0d0; border-radius: 8px; background: #fff; color: #222; font: inherit; font-size: 13px; }
         .selection-count { padding: 0 11px; background: #efefed; }
         .selection-action { min-width: 34px; padding: 0 10px; cursor: pointer; }
         .selection-action:hover { background: #f2f2f2; border-color: #b9b9b5; }
         .selection-delete:hover { color: #c73d3d; border-color: #d85b5b; background: #fff7f7; }
+        .selection-clear { min-width: 34px; }
         .file-checkbox { width: 20px; height: 20px; margin: 0; accent-color: #65db91; cursor: pointer; vertical-align: middle; }
         tr.selected-row td { background: #efefed; }
         th:first-child, td:first-child { width: 36px; padding-right: 2px; }
@@ -277,6 +278,7 @@
     </div>
     <div class="selection-toolbar" id="selectionToolbar">
         <span class="selection-count" id="selectionCount"></span>
+        <button type="button" class="selection-action selection-clear" onclick="clearSelection()" aria-label="Clear selected files">×</button>
         <button type="button" class="selection-action" onclick="downloadSelected()" aria-label="Download selected files">↓</button>
         <button type="button" class="selection-action selection-delete" onclick="deleteSelected()" aria-label="Delete selected files">🗑</button>
     </div>
@@ -339,7 +341,6 @@
                 const actions = document.createElement('td');
                 const actionsList = [];
                 if (canOpen(f.filename)) actionsList.push(['Open', () => openFile(f.id)]);
-                actionsList.push(['⭳', () => downloadFile(f.id)], ['🗑', () => deleteFile(f.id)]);
                 actionsList.forEach(([text, action]) => {
                     const button = document.createElement('button'); button.textContent = text; button.addEventListener('click', action); actions.appendChild(button);
                 });
@@ -353,6 +354,11 @@
             const count = selectedIds.size;
             toolbar.classList.toggle('visible', count > 0);
             document.getElementById('selectionCount').textContent = `${count} ${count === 1 ? 'file' : 'files'}`;
+        }
+
+        function clearSelection() {
+            selectedIds.clear();
+            renderFiles();
         }
 
         function downloadSelected() {
