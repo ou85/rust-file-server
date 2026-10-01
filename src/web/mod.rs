@@ -1,6 +1,6 @@
 use crate::{
-    app::App, auth::UserRole, auth::authenticate, models::FileMetadata, models::LoginRequest,
-    storage,
+    app::App, auth::UserRole, auth::authenticate, blob_store, domain::FileMetadata,
+    domain::LoginRequest,
 };
 use axum::{
     Json, Router,
@@ -42,11 +42,11 @@ async fn health() -> &'static str {
 pub async fn root(jar: CookieJar) -> impl IntoResponse {
     match jar.get("rfs_role") {
         Some(cookie) if cookie.value() == "user" => {
-            Html(include_str!("../assets/ui.html")).into_response()
+            Html(include_str!("../../assets/ui.html")).into_response()
         }
 
         Some(cookie) if cookie.value() == "admin" => {
-            Html(include_str!("../assets/admin.html")).into_response()
+            Html(include_str!("../../assets/admin.html")).into_response()
         }
 
         _ => Redirect::to("/login").into_response(),
@@ -54,7 +54,7 @@ pub async fn root(jar: CookieJar) -> impl IntoResponse {
 }
 
 async fn login_page() -> Html<&'static str> {
-    Html(include_str!("../assets/login.html"))
+    Html(include_str!("../../assets/login.html"))
 }
 
 async fn login(State(app): State<Arc<App>>, Json(req): Json<LoginRequest>) -> impl IntoResponse {
@@ -195,7 +195,7 @@ async fn download_file(
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }));
 
-    let mime = storage::guess_mime(&metadata.filename);
+    let mime = blob_store::guess_mime(&metadata.filename);
 
     Ok((
         StatusCode::OK,
@@ -229,7 +229,7 @@ async fn open_file(
         }
     };
 
-    let mime = storage::guess_mime(&metadata.filename);
+    let mime = blob_store::guess_mime(&metadata.filename);
 
     // Video and audio — redirect to stream
     if mime.starts_with("video/") || mime.starts_with("audio/") {
@@ -280,7 +280,7 @@ async fn upload_files(
         use std::io::Write;
 
         let filename = field.file_name().unwrap_or("unknown").to_string();
-        let id = crate::id::id_16();
+        let id = crate::domain::id::id_16();
 
         let mut file = app.storage.create_file_writer(&id).map_err(|e| {
             (
@@ -355,7 +355,7 @@ async fn upload_files(
         })?;
 
         // Save metadata
-        let metadata = crate::models::FileMetadata {
+        let metadata = crate::domain::FileMetadata {
             id: id.clone(),
             filename: filename.clone(),
             size: total_bytes,
@@ -452,7 +452,7 @@ async fn stream_file(
     };
 
     let file_size = metadata.size;
-    let mime = storage::guess_mime(&metadata.filename);
+    let mime = blob_store::guess_mime(&metadata.filename);
 
     if let Some(range_header) = headers.get(header::RANGE) {
         if let Ok(range_str) = range_header.to_str() {

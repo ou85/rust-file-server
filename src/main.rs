@@ -1,19 +1,18 @@
 mod app;
 mod auth;
+mod blob_store;
 mod config;
 mod crypto;
-mod database;
-mod id;
-mod models;
-mod routes;
-mod storage;
+mod domain;
+mod metadata;
 mod tools;
+mod web;
 
 use app::App;
-use routes::create_router;
 use std::sync::Arc;
 use tools::hashgen;
 use tools::keygen;
+use web::create_router;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

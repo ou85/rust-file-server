@@ -1,4 +1,4 @@
-use crate::{config::Config, models::FileMetadata};
+use crate::{config::Config, domain::FileMetadata};
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
 const FILES: TableDefinition<&str, &str> = TableDefinition::new("files");

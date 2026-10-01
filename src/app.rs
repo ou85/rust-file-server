@@ -1,9 +1,9 @@
 use crate::{
+    blob_store::{ChunkIterator, RangeChunkIterator, Storage},
     config::Config,
     crypto::Crypto,
-    database::MetadataStore,
-    models::FileMetadata,
-    storage::{ChunkIterator, RangeChunkIterator, Storage},
+    domain::FileMetadata,
+    metadata::MetadataStore,
 };
 
 use std::{

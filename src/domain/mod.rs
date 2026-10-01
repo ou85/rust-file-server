@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+
+pub mod id;
 pub struct StoredFile {
     pub id: String,
     pub filename: String,

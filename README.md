@@ -25,16 +25,14 @@ data/
 ├── db/
 └── files/
 src/
+├── auth/          # password verification and roles
+├── blob_store/    # encrypted blob files and temporary uploads
+├── crypto/        # file encryption format
+├── domain/        # file metadata and identifiers
+├── metadata/      # Redb persistence
+├── web/           # Axum routes
 ├── tools/
-│   ├── hashgen.rs
-│   ├── keygen.rs
-│   └── mod.rs
-├── main.rs
-├── config.rs
-├── crypto.rs
-├── database.rs
-├── models.rs
-└── storage.rs
+└── main.rs
 ```
 
 ## Roadmap

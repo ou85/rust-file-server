@@ -1,4 +1,4 @@
-use crate::{crypto::Crypto, models::StoredFile};
+use crate::{crypto::Crypto, domain::StoredFile};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -134,7 +134,7 @@ impl Storage {
             .to_string_lossy()
             .to_string();
         Ok(StoredFile {
-            id: crate::id::id_16(),
+            id: crate::domain::id::id_16(),
             filename,
             content,
         })
