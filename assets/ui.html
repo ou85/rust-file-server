@@ -410,7 +410,7 @@
                 form.append('files', file);
             }
 
-            const uploadBtn = document.querySelector('.upload-button');
+            const uploadBtn = document.querySelector('.queue-upload');
             const progressContainer = document.getElementById('progressContainer');
             const progressBar = document.getElementById('progressBar');
             const progressText = document.getElementById('progressText');
@@ -438,7 +438,7 @@
                 clearQueue();
                 load();
             } catch (error) {
-                uploadBtn.textContent = 'Upload';
+                uploadBtn.textContent = 'Upload selected files';
                 uploadBtn.disabled = false;
                 progressContainer.classList.remove('active');
                 progressText.classList.remove('active');
