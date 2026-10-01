@@ -167,22 +167,75 @@
         }
         .progress-text.active { display: block; }
     </style>
+    <style>
+        :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+        * { box-sizing: border-box; }
+        body { margin: 0; padding: 28px 20px 48px; background: #f7f7f5; color: #161616; }
+        .page-shell { width: min(900px, 100%); margin: 0 auto; }
+        .top-bar { align-items: center; margin: 0 0 24px; }
+        .brand h1 { margin: 0; font-size: 34px; line-height: 1.05; font-weight: 700; letter-spacing: -.03em; }
+        .brand p { margin: 7px 0 0; color: #666; font-size: 16px; }
+        .logout-button { width: 48px; height: 48px; margin: 0; border: 1px solid #d0d0d0; border-radius: 10px; background: #fff; color: #e34b4b; font-size: 22px; }
+        .logout-button:hover { background: #f0f0f0; border-color: #b9b9b5; color: #c93636; }
+        .status-card, .files-card { background: #fff; border: 1px solid #d8d8d5; border-radius: 15px; padding: 24px; box-shadow: none; }
+        .status-card { margin-bottom: 18px; }
+        .status-row { display: flex; justify-content: space-between; align-items: center; min-height: 34px; font-size: 16px; }
+        .status-online { color: #159447; font-size: 14px; }
+        .status-divider { border: 0; border-top: 1px solid #e5e5e2; margin: 13px 0; }
+        .storage-value { font-weight: 600; }
+        .storage-placeholder { margin-top: 10px; height: 8px; overflow: hidden; border-radius: 4px; background: #e6e6e6; }
+        .storage-placeholder span { display: block; width: 0; height: 100%; background: #36c76b; }
+        .files-card { padding-bottom: 10px; }
+        .files-card h2 { margin: 0 0 18px; font-size: 20px; font-weight: 700; }
+        .upload-card { display: block; margin: 0 0 18px; padding: 0; background: transparent; box-shadow: none; }
+        .drop-zone { min-height: 118px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 1px dashed #aaa; border-radius: 14px; background: #fafafa; color: #161616; cursor: pointer; transition: .15s ease; }
+        .drop-zone:hover, .drop-zone.drag-over { border-color: #36a962; background: #f4fbf6; }
+        .drop-title { font-weight: 700; }
+        .drop-hint { color: #777; font-size: 13px; }
+        .file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+        .upload-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+        .upload-button { width: auto; height: 38px; padding: 0 17px; border: 1px solid #2da35a; border-radius: 8px; background: #36c76b; color: #fff; }
+        .upload-button:hover { background: #2eaf5d; border-color: #258d4b; }
+        table { margin-top: 22px; border: 0; border-radius: 0; box-shadow: none; }
+        th, td { padding: 14px 10px; border-bottom: 1px solid #e5e5e2; }
+        th { background: transparent; color: #858585; font-size: 13px; font-weight: 400; }
+        td { font-size: 15px; }
+        td:first-child { font-weight: 600; }
+        td button { height: 34px; min-width: 0; margin: 0 0 0 5px; padding: 6px 11px; border: 1px solid #d0d0d0; border-radius: 8px; background: #fff; color: #222; }
+        td button:hover { filter: none; border-color: #b9b9b5; background: #f0f0f0; }
+        @media (max-width: 620px) { body { padding: 20px 16px 36px; } .status-card, .files-card { padding: 18px; } th, td { padding-left: 6px; padding-right: 6px; } td button { padding: 6px 8px; } }
+    </style>
 </head>
 <body>
-    <div class="top-bar">
-        <h1>FILES</h1>
+    <main class="page-shell">
+    <header class="top-bar">
+        <div class="brand"><h1>RSFS</h1><p>Local Encrypted Storage client</p></div>
         <button type="submit" onclick="logout()" class="logout-button">⏻</button>
-    </div>
-    <h2>Upload</h2>
-    <div class="upload-card">
-        <input type="file" id="file" class="file-input" multiple>
-        <button type="submit" onclick="upload()" class="upload-button">Upload</button>
-    </div>
+    </header>
+    <section class="status-card" aria-label="Server status">
+        <div class="status-row"><span>Server</span><span class="status-online">online</span></div>
+        <hr class="status-divider">
+        <div class="status-row"><span>Storage</span><span class="storage-value">—</span></div>
+        <div class="storage-placeholder" aria-hidden="true"><span></span></div>
+        <hr class="status-divider">
+    </section>
+    <section class="files-card">
+        <h2>Files</h2>
+        <div class="upload-card">
+            <label class="drop-zone" for="file" id="dropZone">
+                <span class="drop-title">Drop files here</span>
+                <span class="drop-hint">or choose files to add them to the upload list</span>
+                <input type="file" id="file" class="file-input" multiple>
+            </label>
+            <div class="upload-actions"><button type="submit" onclick="upload()" class="upload-button">Upload</button></div>
+        </div>
     <div class="progress-container" id="progressContainer">
         <div class="progress-bar" id="progressBar"></div>
     </div>
     <div class="progress-text" id="progressText"></div>
     <table id="files"></table>
+    </section>
+    </main>
     <script>
         async function load() {
             const res = await fetch('/files');
@@ -214,6 +267,18 @@
             const name = filename.toLowerCase();
             return /\.(pdf|svg|md|markdown|txt|text|log|csv|json|xml|yaml|yml|toml|ini|conf|png|jpe?g|gif|webp|avif|mp4|webm|mov|m4v|mp3|wav|ogg|flac)$/.test(name);
         }
+
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('file');
+        ['dragenter', 'dragover'].forEach(eventName => dropZone.addEventListener(eventName, event => {
+            event.preventDefault(); dropZone.classList.add('drag-over');
+        }));
+        ['dragleave', 'drop'].forEach(eventName => dropZone.addEventListener(eventName, event => {
+            event.preventDefault(); dropZone.classList.remove('drag-over');
+        }));
+        dropZone.addEventListener('drop', event => {
+            if (event.dataTransfer.files.length) fileInput.files = event.dataTransfer.files;
+        });
         // function openFile(id) { window.open('/files/' + id + '/open', '_blank'); }
         // function downloadFile(id) { window.location = '/files/' + id + '/download'; }
 
