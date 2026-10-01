@@ -162,7 +162,7 @@ async fn download_file(
     jar: CookieJar,
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
-) -> Result<(StatusCode, [(String, String); 2], Body), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     if let Err(e) = require_user(&jar, &app) {
         return Err(e);
     }
@@ -193,17 +193,12 @@ async fn download_file(
 
     let mime = blob_store::guess_mime(&metadata.filename);
 
-    Ok((
-        StatusCode::OK,
-        [
-            ("Content-Type".to_string(), mime),
-            (
-                "Content-Disposition".to_string(),
-                format!("attachment; filename=\"{}\"", metadata.filename),
-            ),
-        ],
-        Body::from_stream(stream),
-    ))
+    let mut headers = secure_file_headers(&mime, &metadata.filename, false);
+    headers.insert(
+        header::CONTENT_LENGTH,
+        metadata.size.to_string().parse().unwrap(),
+    );
+    Ok((StatusCode::OK, headers, Body::from_stream(stream)))
 }
 
 async fn open_file(
@@ -427,60 +422,55 @@ async fn stream_file(
     let file_size = metadata.size;
     let mime = blob_store::guess_mime(&metadata.filename);
 
-    if let Some(range_header) = headers.get(header::RANGE) {
-        if let Ok(range_str) = range_header.to_str() {
-            if let Some(range) = range_str.strip_prefix("bytes=") {
-                let parts: Vec<&str> = range.split('-').collect();
-                let start: u64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-                let end: u64 = parts
-                    .get(1)
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(file_size - 1)
-                    .min(file_size - 1);
-
-                if start > end || start >= file_size {
-                    return Err((
-                        StatusCode::RANGE_NOT_SATISFIABLE,
-                        Json(serde_json::json!({
-                            "error": "Invalid range",
-                            "file_size": file_size
-                        })),
-                    ));
-                }
-
-                let length = end - start + 1;
-
-                let chunks = app.export_range(&id, start, end).map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({ "error": e.to_string() })),
-                    )
-                })?;
-
-                let stream = futures::stream::iter(
-                    chunks
-                        .map(|c| c.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))),
-                );
-
-                let mut resp_headers = HeaderMap::new();
-                resp_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
-                resp_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
-                resp_headers.insert(
-                    header::CONTENT_RANGE,
-                    format!("bytes {}-{}/{}", start, end, file_size)
-                        .parse()
-                        .unwrap(),
-                );
-                resp_headers.insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
-
-                return Ok((
-                    StatusCode::PARTIAL_CONTENT,
-                    resp_headers,
-                    Body::from_stream(stream),
-                )
-                    .into_response());
+    let range = headers
+        .get(header::RANGE)
+        .map(|value| value.to_str().ok())
+        .flatten();
+    match parse_single_range(range, file_size) {
+        Err(()) => return Err(range_not_satisfiable(file_size)),
+        Ok(Some((start, end))) => {
+            if start > end || start >= file_size {
+                return Err((
+                    StatusCode::RANGE_NOT_SATISFIABLE,
+                    Json(serde_json::json!({
+                        "error": "Invalid range",
+                        "file_size": file_size
+                    })),
+                ));
             }
+
+            let length = end - start + 1;
+
+            let chunks = app.export_range(&id, start, end).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+            })?;
+
+            let stream = futures::stream::iter(
+                chunks.map(|c| c.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))),
+            );
+
+            let mut resp_headers =
+                secure_file_headers(&mime, &metadata.filename, inline_safe(&mime));
+            resp_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+            resp_headers.insert(
+                header::CONTENT_RANGE,
+                format!("bytes {}-{}/{}", start, end, file_size)
+                    .parse()
+                    .unwrap(),
+            );
+            resp_headers.insert(header::CONTENT_LENGTH, length.to_string().parse().unwrap());
+
+            return Ok((
+                StatusCode::PARTIAL_CONTENT,
+                resp_headers,
+                Body::from_stream(stream),
+            )
+                .into_response());
         }
+        Ok(None) => {}
     }
 
     // Full file without Range
@@ -496,8 +486,7 @@ async fn stream_file(
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }));
 
-    let mut resp_headers = HeaderMap::new();
-    resp_headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
+    let mut resp_headers = secure_file_headers(&mime, &metadata.filename, inline_safe(&mime));
     resp_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
     resp_headers.insert(
         header::CONTENT_LENGTH,
@@ -505,4 +494,97 @@ async fn stream_file(
     );
 
     Ok((StatusCode::OK, resp_headers, Body::from_stream(stream)).into_response())
+}
+
+fn parse_single_range(range: Option<&str>, file_size: u64) -> Result<Option<(u64, u64)>, ()> {
+    let Some(range) = range else {
+        return Ok(None);
+    };
+    if file_size == 0 || !range.starts_with("bytes=") {
+        return Err(());
+    }
+    let value = &range[6..];
+    if value.contains(',') {
+        return Err(());
+    }
+    let (start, end) = value.split_once('-').ok_or(())?;
+    if start.is_empty() {
+        let suffix: u64 = end.parse().map_err(|_| ())?;
+        if suffix == 0 {
+            return Err(());
+        }
+        return Ok(Some((file_size.saturating_sub(suffix), file_size - 1)));
+    }
+    let start: u64 = start.parse().map_err(|_| ())?;
+    if start >= file_size {
+        return Err(());
+    }
+    let end = if end.is_empty() {
+        file_size - 1
+    } else {
+        end.parse::<u64>().map_err(|_| ())?.min(file_size - 1)
+    };
+    if start > end {
+        return Err(());
+    }
+    Ok(Some((start, end)))
+}
+
+fn range_not_satisfiable(file_size: u64) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::RANGE_NOT_SATISFIABLE,
+        Json(json!({ "error": "Invalid range", "file_size": file_size })),
+    )
+}
+
+fn inline_safe(mime: &str) -> bool {
+    matches!(
+        mime,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/avif"
+    ) || mime.starts_with("video/")
+        || mime.starts_with("audio/")
+}
+
+fn secure_file_headers(mime: &str, filename: &str, inline: bool) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
+    let disposition = if inline { "inline" } else { "attachment" };
+    let encoded_name = percent_encode_filename(filename);
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("{disposition}; filename=\"download\"; filename*=UTF-8''{encoded_name}")
+            .parse()
+            .unwrap(),
+    );
+    headers
+}
+
+fn percent_encode_filename(filename: &str) -> String {
+    filename
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') {
+                format!("{}", byte as char)
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parses_standard_open_and_suffix_ranges() {
+        assert_eq!(parse_single_range(Some("bytes=2-5"), 10), Ok(Some((2, 5))));
+        assert_eq!(parse_single_range(Some("bytes=7-"), 10), Ok(Some((7, 9))));
+        assert_eq!(parse_single_range(Some("bytes=-3"), 10), Ok(Some((7, 9))));
+        assert!(parse_single_range(Some("bytes=0-1,3-4"), 10).is_err());
+    }
+    #[test]
+    fn encodes_filename_without_header_injection() {
+        assert_eq!(percent_encode_filename("a\r\nb.txt"), "a%0D%0Ab.txt");
+    }
 }

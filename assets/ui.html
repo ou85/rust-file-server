@@ -185,26 +185,25 @@
     <table id="files"></table>
     <script>
         async function load() {
-        const res = await fetch('/files');
-        const files = await res.json();
-        const table = document.getElementById('files');
-        table.innerHTML = '<tr><th>Name</th><th>Size</th><th>Date</th><th>Actions</th></tr>';
-        files.forEach(f => {
-            table.innerHTML += `
-            <tr>
-                <td>${f.filename}</td>
-                <td style="width: 6rem; font-family: monospace, ui-monospace, system-ui, sans-serif; font-size: 0.75rem;text-align: right;">
-                    ${formatSize(f.size)}
-                </td>
-                <td style="width: 8rem; font-family: monospace, ui-monospace, system-ui, sans-serif; font-size: 0.75rem;">
-                    ${formatDate(f.created_at)}
-                </td>
-                <td style="width: 17rem;">
-                    <button onclick="openFile('${f.id}')" style="padding:0.6rem 1rem;margin-right:2rem;">Open</button>
-                    <button onclick="downloadFile('${f.id}')" style="padding:0.6rem 1rem;">⭳</button>
-                    <button onclick="deleteFile('${f.id}')" style="padding:0.6rem 1rem;">&#128465</button>
-                    </td>
-            </tr>`;
+            const res = await fetch('/files');
+            const files = await res.json();
+            const table = document.getElementById('files');
+            table.replaceChildren();
+            const headerRow = document.createElement('tr');
+            ['Name', 'Size', 'Date', 'Actions'].forEach(text => {
+                const th = document.createElement('th'); th.textContent = text; headerRow.appendChild(th);
+            });
+            table.appendChild(headerRow);
+            files.forEach(f => {
+                const row = document.createElement('tr');
+                const name = document.createElement('td'); name.textContent = f.filename; row.appendChild(name);
+                const size = document.createElement('td'); size.textContent = formatSize(f.size); row.appendChild(size);
+                const date = document.createElement('td'); date.textContent = formatDate(f.created_at); row.appendChild(date);
+                const actions = document.createElement('td');
+                [['Open', () => openFile(f.id)], ['⭳', () => downloadFile(f.id)], ['🗑', () => deleteFile(f.id)]].forEach(([text, action]) => {
+                    const button = document.createElement('button'); button.textContent = text; button.addEventListener('click', action); actions.appendChild(button);
+                });
+                row.appendChild(actions); table.appendChild(row);
             });
         }
         // function openFile(id) { window.open('/files/' + id + '/open', '_blank'); }
