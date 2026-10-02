@@ -8,6 +8,7 @@ pub fn run(size: usize) {
     let encoded = general_purpose::STANDARD.encode(&key);
     println!("\n=== Encryption Key (Base64):\n{}", encoded);
     println!("\n=== .env value:");
+    println!("Set RFS_ENCRYPTION_KEY while building the binary:");
     println!("RFS_ENCRYPTION_KEY={}", encoded);
     println!("\n=== Encryption Key (Hex):");
     println!("{}", hex::encode(&key));

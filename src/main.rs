@@ -47,22 +47,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             hashgen::run(None)?;
         }
         Some("password") => {
-            let reset = matches!(args.get(2).map(String::as_str), Some("reset"));
-            if !reset && !matches!(args.get(2).map(String::as_str), Some("change")) {
-                return Err("Usage: password change|reset [--local] [--data-dir <PATH>]".into());
+            if !matches!(args.get(2).map(String::as_str), Some("change")) {
+                return Err("Usage: password change [--local] [--data-dir <PATH>]".into());
             }
             let config = config::Config::from_args(&args[3..])?;
             let app = App::new(config)?;
-            let current = if reset {
-                None
-            } else {
-                Some(tools::password::prompt("Current password: ")?)
-            };
+            let current = tools::password::prompt("Current password: ")?;
             let next = tools::password::prompt(format!(
                 "New password (minimum {} characters): ",
                 auth::MIN_PASSWORD_LEN
             ))?;
-            auth::change_password(&app.metadata, current.as_deref(), &next)?;
+            auth::change_password(&app.metadata, Some(&current), &next)?;
             println!("Password changed. Existing sessions are now invalid.");
         }
         Some("user") => {

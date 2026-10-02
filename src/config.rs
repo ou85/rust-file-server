@@ -10,6 +10,7 @@ pub enum ConfigError {
     ExecutablePath(std::io::Error),
     MissingExecutableDirectory,
     InvalidPort(String),
+    EmbeddedEncryptionKeyMissing,
 }
 
 impl std::fmt::Display for ConfigError {
@@ -30,6 +31,9 @@ impl std::fmt::Display for ConfigError {
                 f,
                 "PORT must be an integer between 0 and 65535; received {value:?}"
             ),
+            Self::EmbeddedEncryptionKeyMissing => f.write_str(
+                "Encryption key was not embedded in this binary; rebuild with RFS_ENCRYPTION_KEY set",
+            ),
         }
     }
 }
@@ -42,10 +46,6 @@ impl std::error::Error for ConfigError {
             _ => None,
         }
     }
-}
-
-fn required_env(name: &'static str) -> Result<String, ConfigError> {
-    std::env::var(name).map_err(|source| ConfigError::Environment { name, source })
 }
 
 pub struct Config {
@@ -104,7 +104,9 @@ impl Config {
             tmp_dir: data_dir.join("tmp"),
             metadata_path: data_dir.join("metadata.redb"),
             data_dir,
-            encryption_key: required_env("RFS_ENCRYPTION_KEY")?,
+            encryption_key: option_env!("RFS_EMBEDDED_ENCRYPTION_KEY")
+                .map(str::to_owned)
+                .ok_or(ConfigError::EmbeddedEncryptionKeyMissing)?,
             bootstrap_password: std::env::var("RFS_BOOTSTRAP_PASSWORD").ok(),
             user_name: "user".to_string(),
             user_password_hash: std::env::var("RFS_USER_PASSWORD_HASH").ok(),
@@ -150,7 +152,6 @@ pub fn usage() -> String {
          --local            listen only on 127.0.0.1\n\
          --data-dir <PATH>  data directory (also configurable with RFS_DATA_DIR)\n\
          password change    change the stored user password\n\
-         password reset     reset the stored user password locally\n\
          user rename        change the stored user name",
         std::env::args().next().unwrap_or_else(|| "rfs".to_string())
     )

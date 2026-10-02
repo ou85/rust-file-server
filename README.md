@@ -102,7 +102,7 @@ strip target/release/rust-file-server
 
 ### Key Generation (keygen)
 
-Generate a cryptographically secure encryption key for the RFS_ENCRYPTION_KEY environment variable.
+Generate a cryptographically secure encryption key for the build environment.
 
 Usage:
 ```bash
@@ -117,10 +117,14 @@ Generated Key (Base64): a3f9x2k8mL9pQwErT5yUiOp2sD4fGhJkLmNoPqRs==
 Generated Key (Hex):    6b7f371a7cec8ac8c53d4144b4a79c8b5c9e2f0a3d6c7e8f9a0b1c2d3e4f5a6b
 ```
 
-Add the Base64 key to your .env file:
-```env
+Set the Base64 key only while building the binary:
+```bash
+RFS_ENCRYPTION_KEY='a3f9x2k8mL9pQwErT5yUiOp2sD4fGhJkLmNoPqRs==' cargo build --release
+```
 
-RFS_ENCRYPTION_KEY=a3f9x2k8mL9pQwErT5yUiOp2sD4fGhJkLmNoPqRs==
+The key is embedded into the resulting binary and is not needed in the runtime
+`.env` file. Anyone who can extract strings or inspect the binary may be able to
+recover this key, so protect the binary like a secret.
 ```
 
 ### Password initialization and rotation
@@ -133,14 +137,12 @@ Stop the server before running local password commands:
 
 ```bash
 cargo run -- password change --data-dir ./data
-cargo run -- password reset --data-dir ./data
 cargo run -- user rename --data-dir ./data
 ```
 
 `change` requires the current password. Passwords must contain at least 8 characters.
-`reset` is a local recovery operation and requires filesystem access to the data directory.
-Both commands create an Argon2id
-hash and revoke existing sessions by increasing the authentication version.
+The command creates an Argon2id hash and revokes existing sessions by increasing
+the authentication version. There is intentionally no password-reset command.
 
 The old `hashgen` command remains available for migrating legacy installations.
 
