@@ -129,9 +129,10 @@ recover this key, so protect the binary like a secret.
 
 ### Password initialization and rotation
 
-On the first startup, set `RFS_BOOTSTRAP_PASSWORD`. It is used once to create the
-user account in `metadata.redb`; subsequent changes to `.env` do not change the
-password used by the server. Remove the variable after initialization.
+On the first startup, `RFS_BOOTSTRAP_PASSWORD` is used once to create the user
+account in `metadata.redb`. If it is absent, the default password is `password`.
+Change it immediately with `password change`; subsequent changes to `.env` do not
+change the password used by the server. Remove the variable after initialization.
 
 Stop the server before running local password commands:
 

@@ -8,6 +8,7 @@ use rand::Rng;
 use std::{collections::HashMap, sync::Mutex};
 
 pub const MIN_PASSWORD_LEN: usize = 8;
+pub const DEFAULT_BOOTSTRAP_PASSWORD: &str = "password";
 
 pub fn authenticate(username: &str, password: &str, config: &Config) -> Option<UserRole> {
     match username {

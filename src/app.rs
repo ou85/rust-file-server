@@ -53,10 +53,16 @@ impl App {
                     )
                     .into());
                 }
-                None => config
-                    .user_password_hash
-                    .clone()
-                    .ok_or("RFS_BOOTSTRAP_PASSWORD is required for first startup")?,
+                None => match config.user_password_hash.clone() {
+                    Some(legacy_hash) => legacy_hash,
+                    None => {
+                        tracing::warn!(
+                            "No bootstrap password configured; using the default password `password`"
+                        );
+                        hash_password(crate::auth::DEFAULT_BOOTSTRAP_PASSWORD)
+                            .map_err(|error| error.to_string())?
+                    }
+                },
             };
             metadata.save_auth_record(&AuthRecord {
                 username: "user".into(),
