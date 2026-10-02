@@ -117,9 +117,9 @@ Generated Key (Base64): a3f9x2k8mL9pQwErT5yUiOp2sD4fGhJkLmNoPqRs==
 Generated Key (Hex):    6b7f371a7cec8ac8c53d4144b4a79c8b5c9e2f0a3d6c7e8f9a0b1c2d3e4f5a6b
 ```
 
-Set the Base64 key only while building the binary:
+The binary has a built-in default key. To use a different key, set it while building:
 ```bash
-RFS_ENCRYPTION_KEY='a3f9x2k8mL9pQwErT5yUiOp2sD4fGhJkLmNoPqRs==' cargo build --release
+RFS_ENCRYPTION_KEY='your-base64-key' cargo build --release
 ```
 
 The key is embedded into the resulting binary and is not needed in the runtime
