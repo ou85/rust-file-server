@@ -60,6 +60,7 @@ pub fn create_router(state: Arc<App>) -> Router {
         .route("/logout", post(logout))
         .route("/health", get(health))
         .route("/storage", get(storage_stats))
+        .route("/me", get(current_user))
         .route("/assets/icons/{name}", get(icon))
         .route("/files", get(list_files).delete(delete_files))
         .route("/files/{id}", get(get_file))
@@ -77,6 +78,24 @@ pub fn create_router(state: Arc<App>) -> Router {
 
 async fn health() -> &'static str {
     "OK"
+}
+
+async fn current_user(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let record = app
+        .auth_record()
+        .map_err(|error| ApiError::internal("Read authentication record", error))?;
+    let role = jar
+        .get("rfs_session")
+        .and_then(|cookie| app.sessions.role(cookie.value(), record.auth_version))
+        .ok_or(ApiError::Forbidden)?;
+    let username = match role {
+        UserRole::User => record.username,
+        UserRole::Admin => app.config.admin_name.clone(),
+    };
+    Ok(Json(json!({ "username": username })))
 }
 
 async fn icon(
@@ -853,6 +872,28 @@ mod tests {
         assert!(inline_safe("application/json", "data.json"));
         assert!(!inline_safe("text/html", "page.html"));
         assert!(!inline_safe("application/zip", "archive.zip"));
+    }
+
+    #[tokio::test]
+    async fn current_user_endpoint_returns_stored_username() {
+        let (app, dir) = test_app();
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/me")
+                    .header(header::COOKIE, user_cookie(&app))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["username"],
+            "user"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

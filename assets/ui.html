@@ -287,7 +287,7 @@
 <body>
     <main class="page-shell">
     <header class="top-bar">
-        <div class="brand"><h1>RSFS</h1><p>Local Encrypted Storage</p></div>
+        <div class="brand"><h1>RSFS</h1><p id="appSubtitle">Local Encrypted Storage</p></div>
         <button type="submit" onclick="logout()" class="logout-button">⏻</button>
     </header>
     <section class="status-card" aria-label="Server status">
@@ -859,6 +859,14 @@
         }
 
         load(true);
+        fetch('/me')
+            .then(response => response.ok ? response.json() : null)
+            .then(user => {
+                if (user?.username) {
+                    document.getElementById('appSubtitle').textContent = `Local Encrypted Storage :: ${user.username}`;
+                }
+            })
+            .catch(() => {});
     </script>
 
     <div class="modal-overlay" id="confirmModal">
