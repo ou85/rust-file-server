@@ -150,7 +150,8 @@ pub fn usage() -> String {
          --local            listen only on 127.0.0.1\n\
          --data-dir <PATH>  data directory (also configurable with RFS_DATA_DIR)\n\
          password change    change the stored user password\n\
-         password reset     reset the stored user password locally",
+         password reset     reset the stored user password locally\n\
+         user rename        change the stored user name",
         std::env::args().next().unwrap_or_else(|| "rfs".to_string())
     )
 }

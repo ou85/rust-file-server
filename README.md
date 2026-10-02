@@ -134,6 +134,7 @@ Stop the server before running local password commands:
 ```bash
 cargo run -- password change --data-dir ./data
 cargo run -- password reset --data-dir ./data
+cargo run -- user rename --data-dir ./data
 ```
 
 `change` requires the current password. Passwords must contain at least 8 characters.

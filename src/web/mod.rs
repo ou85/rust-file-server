@@ -197,27 +197,34 @@ async fn login(
         status: error.status(),
         message: error.body_text(),
     })?;
-    let mut user_record = if req.username == "user" {
+    let mut user_record = {
         Some(
             app.auth_record()
                 .map_err(|error| ApiError::internal("Read authentication record", error))?,
         )
-    } else {
-        None
     };
-    let authenticated = if let Some(record) = user_record.as_ref() {
+    let is_user_login = user_record
+        .as_ref()
+        .is_some_and(|record| req.username == record.username);
+    let authenticated = if is_user_login {
+        let record = user_record.as_ref().ok_or_else(|| {
+            ApiError::internal("Read authentication record", "record unavailable")
+        })?;
         crate::auth::verify_password(&req.password, record)
     } else {
         authenticate(&req.username, &req.password, &app.config).is_some()
     };
     match authenticated {
         true => {
-            let role = if req.username == "user" {
+            let role = if is_user_login {
                 UserRole::User
             } else {
                 UserRole::Admin
             };
-            let auth_version = if let Some(record) = user_record.as_mut() {
+            let auth_version = if is_user_login {
+                let record = user_record.as_mut().ok_or_else(|| {
+                    ApiError::internal("Read authentication record", "record unavailable")
+                })?;
                 if !crate::auth::is_argon2_hash(record) {
                     record.password_hash = crate::auth::hash_password(&req.password)
                         .map_err(|error| ApiError::internal("Upgrade password hash", error))?;
@@ -918,7 +925,7 @@ mod tests {
                     .to_vec(),
             )
             .unwrap();
-            assert!(body.contains("Назад"));
+            assert!(body.contains("Back"));
             assert!(!body.contains("not valid JSON"));
         }
         let response = create_router(app.clone())

@@ -90,6 +90,37 @@ pub fn change_password(
     Ok(())
 }
 
+pub fn rename_user(
+    metadata: &crate::metadata::MetadataStore,
+    current: &str,
+    new_username: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let new_username = new_username.trim();
+    if !(3..=64).contains(&new_username.len())
+        || !new_username
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+    {
+        return Err(
+            "Username must be 3-64 characters and contain only letters, numbers, '.', '_' or '-'"
+                .into(),
+        );
+    }
+    let mut record = metadata
+        .auth_record()?
+        .ok_or("User account is not initialized")?;
+    if !verify_password(current, &record) {
+        return Err("Current password is incorrect".into());
+    }
+    record.username = new_username.to_owned();
+    record.auth_version = record
+        .auth_version
+        .checked_add(1)
+        .ok_or("Authentication version exhausted")?;
+    metadata.save_auth_record(&record)?;
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum UserRole {
     User,

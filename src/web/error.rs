@@ -174,7 +174,7 @@ mod tests {
                 let page = String::from_utf8(body.to_vec()).unwrap();
                 assert!(page.contains("&lt;script&gt;"));
                 assert!(!page.contains("<script>"));
-                assert!(page.contains("Назад"));
+                assert!(page.contains("Back"));
             } else {
                 assert_eq!(
                     serde_json::from_slice::<serde_json::Value>(&body).unwrap()["error"],
