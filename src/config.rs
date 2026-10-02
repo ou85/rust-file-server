@@ -54,12 +54,6 @@ pub struct Config {
     pub tmp_dir: PathBuf,
     pub metadata_path: PathBuf,
     pub encryption_key: String,
-    pub bootstrap_password: Option<String>,
-
-    pub user_name: String,
-    pub admin_name: String,
-    pub user_password_hash: Option<String>,
-    pub admin_password_hash: Option<String>,
 
     pub bind_address: String,
 }
@@ -107,11 +101,6 @@ impl Config {
             encryption_key: option_env!("RFS_EMBEDDED_ENCRYPTION_KEY")
                 .map(str::to_owned)
                 .ok_or(ConfigError::EmbeddedEncryptionKeyMissing)?,
-            bootstrap_password: std::env::var("RFS_BOOTSTRAP_PASSWORD").ok(),
-            user_name: "user".to_string(),
-            user_password_hash: std::env::var("RFS_USER_PASSWORD_HASH").ok(),
-            admin_name: "admin".to_string(),
-            admin_password_hash: std::env::var("RFS_ADMIN_PASSWORD_HASH").ok(),
             bind_address: bind_address(local_only)?,
         })
     }
@@ -151,8 +140,7 @@ pub fn usage() -> String {
          By default the server listens on 0.0.0.0 and stores data next to the executable.\n\
          --local            listen only on 127.0.0.1\n\
          --data-dir <PATH>  data directory (also configurable with RFS_DATA_DIR)\n\
-         password change    change the stored user password\n\
-         user rename        change the stored user name",
+         init               create the first administrator account",
         std::env::args().next().unwrap_or_else(|| "rfs".to_string())
     )
 }

@@ -46,38 +46,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("hashgen") => {
             hashgen::run(None)?;
         }
-        Some("password") => {
-            if !matches!(args.get(2).map(String::as_str), Some("change")) {
-                return Err("Usage: password change [--local] [--data-dir <PATH>]".into());
-            }
-            let config = config::Config::from_args(&args[3..])?;
-            let app = App::new(config)?;
-            let current = tools::password::prompt("Current password: ")?;
-            let next = tools::password::prompt(format!(
-                "New password (minimum {} characters): ",
-                auth::MIN_PASSWORD_LEN
-            ))?;
-            let confirmation = tools::password::prompt("Repeat new password: ")?;
-            if next != confirmation {
-                return Err("New passwords do not match".into());
-            }
-            auth::change_password(&app.metadata, Some(&current), &next)?;
-            println!("Password changed. Existing sessions are now invalid.");
-        }
-        Some("user") => {
-            if !matches!(args.get(2).map(String::as_str), Some("rename")) {
-                return Err("Usage: user rename [--local] [--data-dir <PATH>]".into());
-            }
-            let config = config::Config::from_args(&args[3..])?;
-            let app = App::new(config)?;
-            let current = tools::password::prompt("Current password: ")?;
-            print!("New username: ");
+        Some("init") => {
+            let config = config::Config::from_args(&args[2..])?;
+            print!("Administrator username [admin]: ");
             use std::io::{self, Write};
             io::stdout().flush()?;
             let mut username = String::new();
             io::stdin().read_line(&mut username)?;
-            auth::rename_user(&app.metadata, &current, username.trim())?;
-            println!("Username changed. Existing sessions are now invalid.");
+            let username = match username.trim() {
+                "" => "admin",
+                username => username,
+            };
+            let password = tools::password::prompt(format!(
+                "Administrator password (minimum {} characters): ",
+                auth::MIN_PASSWORD_LEN
+            ))?;
+            let confirmation = tools::password::prompt("Repeat administrator password: ")?;
+            if password != confirmation {
+                return Err("Passwords do not match".into());
+            }
+            App::initialize(&config, username, &password)?;
+            println!("Initialization complete. Start the server with `rfs`.");
         }
         Some("demo") => {
             let config = config::Config::from_args(&args[2..])?;

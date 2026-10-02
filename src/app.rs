@@ -1,9 +1,9 @@
 use crate::{
-    auth::{SessionStore, hash_password},
+    auth::{Session, SessionStore, hash_password, validate_username},
     blob_store::{ChunkIterator, RangeChunkIterator, Storage},
     config::Config,
     crypto::Crypto,
-    domain::{AuthRecord, FileMetadata},
+    domain::{FileMetadata, UserAccount, UserRole},
     metadata::MetadataStore,
 };
 
@@ -25,53 +25,75 @@ pub struct App {
 }
 
 impl App {
-    pub fn auth_record(&self) -> Result<crate::domain::AuthRecord, Box<dyn std::error::Error>> {
-        self.metadata
-            .auth_record()?
-            .ok_or_else(|| "User account is not initialized".into())
-    }
-
-    pub fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
+    fn prepare(
+        config: &Config,
+    ) -> Result<(Arc<Storage>, MetadataStore, Crypto), Box<dyn std::error::Error>> {
         ensure_dir_exists(&config.data_dir)?;
         ensure_dir_exists(&config.blobs_dir)?;
         ensure_dir_exists(&config.tmp_dir)?;
+        Ok((
+            Arc::new(Storage::new(
+                config.blobs_dir.clone(),
+                config.tmp_dir.clone(),
+            )?),
+            MetadataStore::new(config)?,
+            Crypto::new(&config.encryption_key)?,
+        ))
+    }
 
-        let storage = Arc::new(Storage::new(
-            config.blobs_dir.clone(),
-            config.tmp_dir.clone(),
-        )?);
-        let metadata = MetadataStore::new(&config)?;
-        if metadata.auth_record()?.is_none() {
-            let password_hash = match config.bootstrap_password.as_deref() {
-                Some(password) if password.trim().len() >= crate::auth::MIN_PASSWORD_LEN => {
-                    hash_password(password).map_err(|error| error.to_string())?
-                }
-                Some(_) => {
-                    return Err(format!(
-                        "RFS_BOOTSTRAP_PASSWORD must contain at least {} characters",
-                        crate::auth::MIN_PASSWORD_LEN
-                    )
-                    .into());
-                }
-                None => match config.user_password_hash.clone() {
-                    Some(legacy_hash) => legacy_hash,
-                    None => {
-                        tracing::warn!(
-                            "No bootstrap password configured; using the default password `password`"
-                        );
-                        hash_password(crate::auth::DEFAULT_BOOTSTRAP_PASSWORD)
-                            .map_err(|error| error.to_string())?
-                    }
-                },
-            };
-            metadata.save_auth_record(&AuthRecord {
-                username: "user".into(),
-                password_hash,
-                auth_version: 1,
-            })?;
-            tracing::info!("Initial user account created");
+    pub fn initialize(
+        config: &Config,
+        admin_username: &str,
+        admin_password: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        validate_username(admin_username)?;
+        let (_, metadata, _) = Self::prepare(config)?;
+        if metadata.user_count()? != 0 {
+            return Err("Server is already initialized".into());
         }
-        let crypto = Crypto::new(&config.encryption_key)?;
+        let account = UserAccount {
+            id: uuid::Uuid::new_v4().to_string(),
+            username: admin_username.to_owned(),
+            password_hash: hash_password(admin_password)?,
+            auth_version: 1,
+            role: UserRole::Admin,
+            password_change_required: false,
+        };
+        metadata.create_user(&account)?;
+        let legacy_files = metadata.legacy_file_count()?;
+        if legacy_files > 0 {
+            tracing::warn!(
+                legacy_files,
+                "Legacy files were found and remain unassigned and inaccessible"
+            );
+        }
+        tracing::info!(username = %admin_username, "Administrator account initialized");
+        Ok(())
+    }
+
+    pub fn current_user(
+        &self,
+        token: &str,
+    ) -> Result<Option<UserAccount>, Box<dyn std::error::Error>> {
+        let Some(Session {
+            user_id,
+            role,
+            auth_version,
+        }) = self.sessions.get(token)
+        else {
+            return Ok(None);
+        };
+        let Some(account) = self.metadata.get_user(&user_id)? else {
+            return Ok(None);
+        };
+        Ok((account.role == role && account.auth_version == auth_version).then_some(account))
+    }
+
+    pub fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
+        let (storage, metadata, crypto) = Self::prepare(&config)?;
+        if metadata.user_count()? == 0 {
+            return Err("Server is not initialized. Run `rfs init` first".into());
+        }
 
         match storage.cleanup_all_tmp_files() {
             Ok(count) if count > 0 => tracing::info!(count, "Orphaned temporary files removed"),

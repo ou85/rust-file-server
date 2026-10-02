@@ -1,6 +1,7 @@
 use crate::{
-    app::App, auth::UserRole, auth::authenticate, blob_store, domain::BulkDeleteRequest,
-    domain::FileMetadata, domain::LoginRequest,
+    app::App,
+    blob_store,
+    domain::{BulkDeleteRequest, FileMetadata, LoginRequest, UserRole},
 };
 use axum::{
     Json, Router,
@@ -84,18 +85,8 @@ async fn current_user(
     jar: CookieJar,
     State(app): State<Arc<App>>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let record = app
-        .auth_record()
-        .map_err(|error| ApiError::internal("Read authentication record", error))?;
-    let role = jar
-        .get("rfs_session")
-        .and_then(|cookie| app.sessions.role(cookie.value(), record.auth_version))
-        .ok_or(ApiError::Forbidden)?;
-    let username = match role {
-        UserRole::User => record.username,
-        UserRole::Admin => app.config.admin_name.clone(),
-    };
-    Ok(Json(json!({ "username": username })))
+    let account = session_user(&jar, &app)?;
+    Ok(Json(json!({ "username": account.username })))
 }
 
 async fn icon(
@@ -191,15 +182,16 @@ fn directory_size(path: &std::path::Path) -> std::io::Result<u64> {
 }
 
 pub async fn root(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoResponse {
-    match jar.get("rfs_session").and_then(|cookie| {
-        app.auth_record()
-            .ok()
-            .and_then(|record| app.sessions.role(cookie.value(), record.auth_version))
-    }) {
-        Some(UserRole::User) => Html(include_str!("../../assets/ui.html")).into_response(),
-
-        Some(UserRole::Admin) => Html(include_str!("../../assets/admin.html")).into_response(),
-
+    match jar
+        .get("rfs_session")
+        .and_then(|cookie| app.current_user(cookie.value()).ok().flatten())
+    {
+        Some(account) if account.role == UserRole::User => {
+            Html(include_str!("../../assets/ui.html")).into_response()
+        }
+        Some(account) if account.role == UserRole::Admin => {
+            Html(include_str!("../../assets/admin.html")).into_response()
+        }
         _ => Redirect::to("/login").into_response(),
     }
 }
@@ -216,53 +208,16 @@ async fn login(
         status: error.status(),
         message: error.body_text(),
     })?;
-    let mut user_record = {
-        Some(
-            app.auth_record()
-                .map_err(|error| ApiError::internal("Read authentication record", error))?,
-        )
-    };
-    let is_user_login = user_record
-        .as_ref()
-        .is_some_and(|record| req.username == record.username);
-    let authenticated = if is_user_login {
-        let record = user_record.as_ref().ok_or_else(|| {
-            ApiError::internal("Read authentication record", "record unavailable")
-        })?;
-        crate::auth::verify_password(&req.password, record)
-    } else {
-        authenticate(&req.username, &req.password, &app.config).is_some()
-    };
-    match authenticated {
-        true => {
-            let role = if is_user_login {
-                UserRole::User
-            } else {
-                UserRole::Admin
-            };
-            let auth_version = if is_user_login {
-                let record = user_record.as_mut().ok_or_else(|| {
-                    ApiError::internal("Read authentication record", "record unavailable")
-                })?;
-                if !crate::auth::is_argon2_hash(record) {
-                    record.password_hash = crate::auth::hash_password(&req.password)
-                        .map_err(|error| ApiError::internal("Upgrade password hash", error))?;
-                    record.auth_version = record.auth_version.saturating_add(1);
-                    app.metadata.save_auth_record(record).map_err(|error| {
-                        ApiError::internal("Save upgraded password hash", error)
-                    })?;
-                    tracing::info!("Legacy password hash upgraded to Argon2id");
-                }
-                record.auth_version
-            } else {
-                app.auth_record()
-                    .map_err(|error| ApiError::internal("Read authentication record", error))?
-                    .auth_version
-            };
-            tracing::info!(?role, "Login succeeded");
+    let account = app
+        .metadata
+        .get_user_by_username(&req.username)
+        .map_err(|error| ApiError::internal("Read user account", error))?;
+    match account.filter(|account| crate::auth::verify_password(&req.password, account)) {
+        Some(account) => {
+            tracing::info!(username = %account.username, role = ?account.role, "Login succeeded");
             let token = app
                 .sessions
-                .create(role, auth_version)
+                .create(&account)
                 .map_err(|error| ApiError::internal("Create session", error))?;
 
             Ok((
@@ -275,7 +230,7 @@ async fn login(
                 .into_response())
         }
 
-        false => {
+        None => {
             tracing::warn!("Login failed");
 
             Err(ApiError::Unauthorized)
@@ -607,15 +562,17 @@ async fn logout(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoRespons
     )
 }
 
+fn session_user(jar: &CookieJar, app: &App) -> ApiResult<crate::domain::UserAccount> {
+    let cookie = jar.get("rfs_session").ok_or(ApiError::Forbidden)?;
+    app.current_user(cookie.value())
+        .map_err(|error| ApiError::internal("Read session user", error))?
+        .ok_or(ApiError::Forbidden)
+}
+
 fn require_user(jar: &CookieJar, app: &App) -> ApiResult<()> {
-    match jar.get("rfs_session").and_then(|cookie| {
-        app.auth_record()
-            .ok()
-            .and_then(|record| app.sessions.role(cookie.value(), record.auth_version))
-    }) {
-        Some(UserRole::User) => Ok(()),
-        _ => Err(ApiError::Forbidden),
-    }
+    (session_user(jar, app)?.role == UserRole::User)
+        .then_some(())
+        .ok_or(ApiError::Forbidden)
 }
 
 async fn stream_file(
@@ -823,7 +780,11 @@ fn percent_encode_filename(filename: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{auth::UserRole, config::Config};
+    use crate::{
+        auth::hash_password,
+        config::Config,
+        domain::{UserAccount, UserRole},
+    };
     use axum::{body::to_bytes, http::Request};
     use std::{fs, path::PathBuf};
     use tower::ServiceExt;
@@ -839,20 +800,29 @@ mod tests {
                 &base64::engine::general_purpose::STANDARD,
                 [7u8; 32],
             ),
-            bootstrap_password: Some("test-password".into()),
-            user_name: "user".into(),
-            admin_name: "admin".into(),
-            user_password_hash: None,
-            admin_password_hash: None,
             bind_address: "127.0.0.1:0".into(),
         };
-        (Arc::new(App::new(config).unwrap()), dir)
+        App::initialize(&config, "admin", "test-password").unwrap();
+        let app = Arc::new(App::new(config).unwrap());
+        app.metadata
+            .create_user(&UserAccount {
+                id: "test-user".into(),
+                username: "user".into(),
+                password_hash: hash_password("test-password").unwrap(),
+                auth_version: 1,
+                role: UserRole::User,
+                password_change_required: false,
+            })
+            .unwrap();
+        (app, dir)
     }
 
     fn user_cookie(app: &App) -> String {
         format!(
             "rfs_session={}",
-            app.sessions.create(UserRole::User, 1).unwrap()
+            app.sessions
+                .create(&app.metadata.get_user_by_username("user").unwrap().unwrap())
+                .unwrap()
         )
     }
     #[test]

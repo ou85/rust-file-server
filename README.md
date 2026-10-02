@@ -127,48 +127,24 @@ The key is embedded into the resulting binary and is not needed in the runtime
 recover this key, so protect the binary like a secret.
 ```
 
-### Password initialization and rotation
+### First start and administrator account
 
-On the first startup, `RFS_BOOTSTRAP_PASSWORD` is used once to create the user
-account in `metadata.redb`. If it is absent, the default password is `password`.
-Change it immediately with `password change`; subsequent changes to `.env` do not
-change the password used by the server. Remove the variable after initialization.
-
-Stop the server before running local password commands:
+There is no default password and no password is read from `.env`. On a new data
+directory, create the first administrator explicitly before starting the server:
 
 ```bash
-cargo run -- password change --data-dir ./data
-cargo run -- user rename --data-dir ./data
+cargo run -- init --data-dir ./data
 ```
 
-`change` requires the current password. Passwords must contain at least 8 characters.
-The command creates an Argon2id hash and revokes existing sessions by increasing
-the authentication version. There is intentionally no password-reset command.
+The command asks for an administrator name (default: `admin`) and a password twice.
+Passwords are stored as Argon2id hashes in `metadata.redb` and must contain at least
+8 characters. A normal server start refuses to run until this step is complete.
 
-The old `hashgen` command remains available for migrating legacy installations.
+`hashgen` remains available only as a standalone utility:
 
-Usage:
 ```bash
-
-cargo run hashgen
+cargo run -- hashgen
 ```
-
-Prompt:
-```
-Enter password to hash: 
-```
-
-Output:
-```
-Bcrypt hash: $2b$12$5QU3Tl1gcmEyFZL/ahdBHOU14UMQYRDkwvrVZufE8.QolJEmMva0e
-```
-
-For legacy installations only, this hash can be used as a one-time migration value:
-```env
-
-RFS_USER_PASSWORD_HASH='$2b$12$5QU3Tl1gcmEyFZL/ahdBHOU14UMQYRDkwvrVZufE8.QolJEmMva0e'
-```
-⚠️ Important: Always enclose bcrypt hashes in double quotes in .env files to avoid truncation caused by $ symbol expansion.  ( in some cases single quotes works better )
 
 
 ## Portable Static Build (Linux)
