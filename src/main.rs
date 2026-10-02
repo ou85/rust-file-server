@@ -57,6 +57,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "New password (minimum {} characters): ",
                 auth::MIN_PASSWORD_LEN
             ))?;
+            let confirmation = tools::password::prompt("Repeat new password: ")?;
+            if next != confirmation {
+                return Err("New passwords do not match".into());
+            }
             auth::change_password(&app.metadata, Some(&current), &next)?;
             println!("Password changed. Existing sessions are now invalid.");
         }
