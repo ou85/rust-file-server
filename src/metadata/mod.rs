@@ -90,6 +90,77 @@ impl MetadataStore {
             .map_err(Into::into)
     }
 
+    pub fn list_users(&self) -> Result<Vec<UserAccount>, Box<dyn std::error::Error>> {
+        let transaction = self.db.begin_read()?;
+        let table = transaction.open_table(USERS)?;
+        let mut users = Vec::new();
+        for entry in table.iter()? {
+            let (_, value) = entry?;
+            users.push(serde_json::from_str(value.value())?);
+        }
+        users.sort_by(|left: &UserAccount, right: &UserAccount| left.username.cmp(&right.username));
+        Ok(users)
+    }
+
+    pub fn rename_user(
+        &self,
+        id: &str,
+        username: &str,
+    ) -> Result<Option<UserAccount>, Box<dyn std::error::Error>> {
+        let transaction = self.db.begin_write()?;
+        let mut user = {
+            let users = transaction.open_table(USERS)?;
+            let Some(value) = users.get(id)? else {
+                return Ok(None);
+            };
+            serde_json::from_str::<UserAccount>(value.value())?
+        };
+        if user.username == username {
+            return Ok(Some(user));
+        }
+        {
+            let names = transaction.open_table(USERNAMES)?;
+            if names.get(username)?.is_some() {
+                return Err("Username already exists".into());
+            }
+        }
+        let old_username = std::mem::replace(&mut user.username, username.to_owned());
+        let json = serde_json::to_string(&user)?;
+        {
+            let mut names = transaction.open_table(USERNAMES)?;
+            names.remove(old_username.as_str())?;
+            names.insert(username, id)?;
+        }
+        {
+            let mut users = transaction.open_table(USERS)?;
+            users.insert(id, json.as_str())?;
+        }
+        transaction.commit()?;
+        Ok(Some(user))
+    }
+
+    pub fn require_password_change(
+        &self,
+        id: &str,
+    ) -> Result<Option<UserAccount>, Box<dyn std::error::Error>> {
+        let transaction = self.db.begin_write()?;
+        let mut user = {
+            let users = transaction.open_table(USERS)?;
+            let Some(value) = users.get(id)? else {
+                return Ok(None);
+            };
+            serde_json::from_str::<UserAccount>(value.value())?
+        };
+        user.password_change_required = true;
+        let json = serde_json::to_string(&user)?;
+        {
+            let mut users = transaction.open_table(USERS)?;
+            users.insert(id, json.as_str())?;
+        }
+        transaction.commit()?;
+        Ok(Some(user))
+    }
+
     pub fn legacy_file_count(&self) -> Result<usize, Box<dyn std::error::Error>> {
         let transaction = self.db.begin_read()?;
         Ok(transaction.open_table(FILES)?.len()? as usize)

@@ -27,6 +27,17 @@ pub struct BulkDeleteRequest {
     pub ids: Vec<String>,
 }
 
+#[derive(Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Deserialize)]
+pub struct RenameUserRequest {
+    pub username: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserRole {
@@ -42,4 +53,23 @@ pub struct UserAccount {
     pub auth_version: u64,
     pub role: UserRole,
     pub password_change_required: bool,
+}
+
+#[derive(Serialize)]
+pub struct UserInfo {
+    pub id: String,
+    pub username: String,
+    pub role: UserRole,
+    pub password_change_required: bool,
+}
+
+impl From<&UserAccount> for UserInfo {
+    fn from(account: &UserAccount) -> Self {
+        Self {
+            id: account.id.clone(),
+            username: account.username.clone(),
+            role: account.role,
+            password_change_required: account.password_change_required,
+        }
+    }
 }

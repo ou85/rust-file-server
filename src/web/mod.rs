@@ -1,7 +1,10 @@
 use crate::{
     app::App,
     blob_store,
-    domain::{BulkDeleteRequest, FileMetadata, LoginRequest, UserRole},
+    domain::{
+        BulkDeleteRequest, CreateUserRequest, FileMetadata, LoginRequest, RenameUserRequest,
+        UserAccount, UserInfo, UserRole,
+    },
 };
 use axum::{
     Json, Router,
@@ -12,7 +15,7 @@ use axum::{
     },
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use axum_extra::extract::CookieJar;
 use bytes::Bytes;
@@ -62,6 +65,12 @@ pub fn create_router(state: Arc<App>) -> Router {
         .route("/health", get(health))
         .route("/storage", get(storage_stats))
         .route("/me", get(current_user))
+        .route("/admin/users", get(list_users).post(create_user))
+        .route("/admin/users/{id}/name", put(rename_user))
+        .route(
+            "/admin/users/{id}/request-password-change",
+            post(request_password_change),
+        )
         .route("/assets/icons/{name}", get(icon))
         .route("/files", get(list_files).delete(delete_files))
         .route("/files/{id}", get(get_file))
@@ -87,6 +96,96 @@ async fn current_user(
 ) -> ApiResult<Json<serde_json::Value>> {
     let account = session_user(&jar, &app)?;
     Ok(Json(json!({ "username": account.username })))
+}
+
+async fn list_users(jar: CookieJar, State(app): State<Arc<App>>) -> ApiResult<Json<Vec<UserInfo>>> {
+    require_admin(&jar, &app)?;
+    let users = app
+        .metadata
+        .list_users()
+        .map_err(|error| ApiError::internal("List users", error))?;
+    Ok(Json(users.iter().map(UserInfo::from).collect()))
+}
+
+async fn create_user(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    request: Result<Json<CreateUserRequest>, JsonRejection>,
+) -> ApiResult<(StatusCode, Json<UserInfo>)> {
+    require_admin(&jar, &app)?;
+    let Json(request) = request.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
+    crate::auth::validate_username(&request.username)
+        .map_err(|message| ApiError::BadRequest(message.into()))?;
+    let user = UserAccount {
+        id: uuid::Uuid::new_v4().to_string(),
+        username: request.username,
+        password_hash: crate::auth::hash_password(&request.password)
+            .map_err(|error| ApiError::BadRequest(error.to_string()))?,
+        auth_version: 1,
+        role: UserRole::User,
+        password_change_required: true,
+    };
+    app.metadata
+        .create_user(&user)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    tracing::info!(username = %user.username, "User account created");
+    Ok((StatusCode::CREATED, Json(UserInfo::from(&user))))
+}
+
+async fn rename_user(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    request: Result<Json<RenameUserRequest>, JsonRejection>,
+) -> ApiResult<Json<UserInfo>> {
+    require_admin(&jar, &app)?;
+    let Json(request) = request.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
+    crate::auth::validate_username(&request.username)
+        .map_err(|message| ApiError::BadRequest(message.into()))?;
+    let user = app
+        .metadata
+        .get_user(&id)
+        .map_err(|error| ApiError::internal("Read user account", error))?
+        .ok_or(ApiError::NotFound("User not found"))?;
+    if user.role == UserRole::Admin {
+        return Err(ApiError::Forbidden);
+    }
+    let user = app
+        .metadata
+        .rename_user(&id, &request.username)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?
+        .ok_or(ApiError::NotFound("User not found"))?;
+    tracing::info!(user_id = %id, username = %user.username, "User account renamed");
+    Ok(Json(UserInfo::from(&user)))
+}
+
+async fn request_password_change(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<UserInfo>> {
+    require_admin(&jar, &app)?;
+    let user = app
+        .metadata
+        .get_user(&id)
+        .map_err(|error| ApiError::internal("Read user account", error))?
+        .ok_or(ApiError::NotFound("User not found"))?;
+    if user.role == UserRole::Admin {
+        return Err(ApiError::Forbidden);
+    }
+    let user = app
+        .metadata
+        .require_password_change(&id)
+        .map_err(|error| ApiError::internal("Request password change", error))?
+        .ok_or(ApiError::NotFound("User not found"))?;
+    tracing::info!(user_id = %id, "Password change requested");
+    Ok(Json(UserInfo::from(&user)))
 }
 
 async fn icon(
@@ -575,6 +674,12 @@ fn require_user(jar: &CookieJar, app: &App) -> ApiResult<()> {
         .ok_or(ApiError::Forbidden)
 }
 
+fn require_admin(jar: &CookieJar, app: &App) -> ApiResult<()> {
+    (session_user(jar, app)?.role == UserRole::Admin)
+        .then_some(())
+        .ok_or(ApiError::Forbidden)
+}
+
 async fn stream_file(
     jar: CookieJar,
     Path(id): Path<String>,
@@ -822,6 +927,15 @@ mod tests {
             "rfs_session={}",
             app.sessions
                 .create(&app.metadata.get_user_by_username("user").unwrap().unwrap())
+                .unwrap()
+        )
+    }
+
+    fn admin_cookie(app: &App) -> String {
+        format!(
+            "rfs_session={}",
+            app.sessions
+                .create(&app.metadata.get_user_by_username("admin").unwrap().unwrap())
                 .unwrap()
         )
     }
@@ -1210,6 +1324,80 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert!(app.list_files().unwrap().is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn administrator_can_create_rename_and_require_password_change() {
+        let (app, dir) = test_app();
+        let router = create_router(app.clone());
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/users")
+                    .header("cookie", admin_cookie(&app))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"username":"alice","password":"temporary-password"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(created["username"], "alice");
+        assert_eq!(created["password_change_required"], true);
+        let id = created["id"].as_str().unwrap();
+
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/admin/users/{id}/name"))
+                    .header("cookie", admin_cookie(&app))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"username":"alice-new"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            app.metadata
+                .get_user_by_username("alice-new")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            app.metadata
+                .get_user_by_username("alice")
+                .unwrap()
+                .is_none()
+        );
+
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/admin/users/{id}/request-password-change"))
+                    .header("cookie", admin_cookie(&app))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            app.metadata
+                .get_user(id)
+                .unwrap()
+                .unwrap()
+                .password_change_required
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }
