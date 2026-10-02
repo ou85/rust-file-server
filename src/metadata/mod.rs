@@ -161,6 +161,31 @@ impl MetadataStore {
         Ok(Some(user))
     }
 
+    pub fn change_password(
+        &self,
+        id: &str,
+        password_hash: &str,
+    ) -> Result<Option<UserAccount>, Box<dyn std::error::Error>> {
+        let transaction = self.db.begin_write()?;
+        let mut user = {
+            let users = transaction.open_table(USERS)?;
+            let Some(value) = users.get(id)? else {
+                return Ok(None);
+            };
+            serde_json::from_str::<UserAccount>(value.value())?
+        };
+        user.password_hash = password_hash.to_owned();
+        user.password_change_required = false;
+        user.auth_version = user.auth_version.saturating_add(1);
+        let json = serde_json::to_string(&user)?;
+        {
+            let mut users = transaction.open_table(USERS)?;
+            users.insert(id, json.as_str())?;
+        }
+        transaction.commit()?;
+        Ok(Some(user))
+    }
+
     pub fn legacy_file_count(&self) -> Result<usize, Box<dyn std::error::Error>> {
         let transaction = self.db.begin_read()?;
         Ok(transaction.open_table(FILES)?.len()? as usize)

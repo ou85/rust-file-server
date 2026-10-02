@@ -38,6 +38,12 @@ pub struct RenameUserRequest {
     pub username: String,
 }
 
+#[derive(Deserialize)]
+pub struct ChangePasswordRequest {
+    pub password: String,
+    pub confirmation: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserRole {

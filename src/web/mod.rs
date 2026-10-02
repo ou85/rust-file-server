@@ -2,8 +2,8 @@ use crate::{
     app::App,
     blob_store,
     domain::{
-        BulkDeleteRequest, CreateUserRequest, FileMetadata, LoginRequest, RenameUserRequest,
-        UserAccount, UserInfo, UserRole,
+        BulkDeleteRequest, ChangePasswordRequest, CreateUserRequest, FileMetadata, LoginRequest,
+        RenameUserRequest, UserAccount, UserInfo, UserRole,
     },
 };
 use axum::{
@@ -61,6 +61,10 @@ pub fn create_router(state: Arc<App>) -> Router {
         .route("/", get(root))
         .route("/login", post(login))
         .route("/login", get(login_page))
+        .route(
+            "/change-password",
+            get(change_password_page).post(change_password),
+        )
         .route("/logout", post(logout))
         .route("/health", get(health))
         .route("/storage", get(storage_stats))
@@ -285,6 +289,9 @@ pub async fn root(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoRespo
         .get("rfs_session")
         .and_then(|cookie| app.current_user(cookie.value()).ok().flatten())
     {
+        Some(account) if account.role == UserRole::User && account.password_change_required => {
+            Redirect::to("/change-password").into_response()
+        }
         Some(account) if account.role == UserRole::User => {
             Html(include_str!("../../assets/ui.html")).into_response()
         }
@@ -297,6 +304,57 @@ pub async fn root(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoRespo
 
 async fn login_page() -> Html<&'static str> {
     Html(include_str!("../../assets/login.html"))
+}
+
+async fn change_password_page(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoResponse {
+    match session_user(&jar, &app) {
+        Ok(account) if account.role == UserRole::User && account.password_change_required => {
+            Html(include_str!("../../assets/change_password.html")).into_response()
+        }
+        Ok(_) => Redirect::to("/").into_response(),
+        Err(_) => Redirect::to("/login").into_response(),
+    }
+}
+
+async fn change_password(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    request: Result<Json<ChangePasswordRequest>, JsonRejection>,
+) -> ApiResult<Response> {
+    let account = session_user(&jar, &app)?;
+    if account.role != UserRole::User || !account.password_change_required {
+        return Err(ApiError::Forbidden);
+    }
+    let Json(request) = request.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
+    if request.password != request.confirmation {
+        return Err(ApiError::BadRequest("Passwords do not match".into()));
+    }
+    let hash = crate::auth::hash_password(&request.password)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    let account = app
+        .metadata
+        .change_password(&account.id, &hash)
+        .map_err(|error| ApiError::internal("Change password", error))?
+        .ok_or(ApiError::Forbidden)?;
+    let token = app
+        .sessions
+        .create(&account)
+        .map_err(|error| ApiError::internal("Create replacement session", error))?;
+    if let Some(old) = jar.get("rfs_session") {
+        app.sessions.remove(old.value());
+    }
+    tracing::info!(user_id = %account.id, "Password changed");
+    Ok((
+        StatusCode::OK,
+        [(
+            header::SET_COOKIE,
+            format!("rfs_session={token}; Path=/; HttpOnly; SameSite=Strict"),
+        )],
+    )
+        .into_response())
 }
 
 async fn login(
@@ -669,9 +727,16 @@ fn session_user(jar: &CookieJar, app: &App) -> ApiResult<crate::domain::UserAcco
 }
 
 fn require_user(jar: &CookieJar, app: &App) -> ApiResult<()> {
-    (session_user(jar, app)?.role == UserRole::User)
-        .then_some(())
-        .ok_or(ApiError::Forbidden)
+    (matches!(
+        session_user(jar, app)?,
+        UserAccount {
+            role: UserRole::User,
+            password_change_required: false,
+            ..
+        }
+    ))
+    .then_some(())
+    .ok_or(ApiError::Forbidden)
 }
 
 fn require_admin(jar: &CookieJar, app: &App) -> ApiResult<()> {
@@ -1398,6 +1463,89 @@ mod tests {
                 .unwrap()
                 .password_change_required
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn password_change_blocks_file_access_until_completed() {
+        let (app, dir) = test_app();
+        let account = UserAccount {
+            id: "must-change".into(),
+            username: "bob".into(),
+            password_hash: hash_password("temporary-password").unwrap(),
+            auth_version: 1,
+            role: UserRole::User,
+            password_change_required: true,
+        };
+        app.metadata.create_user(&account).unwrap();
+        let old_cookie = format!("rfs_session={}", app.sessions.create(&account).unwrap());
+
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header("cookie", &old_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers()[header::LOCATION], "/change-password");
+
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/files")
+                    .header("cookie", &old_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/change-password")
+                    .header("cookie", &old_cookie)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"password":"new-long-password","confirmation":"new-long-password"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let new_cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        assert!(crate::auth::verify_password(
+            "new-long-password",
+            &app.metadata.get_user("must-change").unwrap().unwrap()
+        ));
+
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/files")
+                    .header("cookie", new_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
         fs::remove_dir_all(dir).unwrap();
     }
 }
