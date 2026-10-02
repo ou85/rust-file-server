@@ -140,6 +140,12 @@ The command asks for an administrator name (default: `admin`) and a password twi
 Passwords are stored as Argon2id hashes in `metadata.redb` and must contain at least
 8 characters. A normal server start refuses to run until this step is complete.
 
+The administrator creates regular users in the administration panel. Each regular
+user receives an independent random data-encryption key; files are visible and
+decryptable only for their owner. A newly created user must change the temporary
+password after their first login. Files from an older single-user database are kept
+on disk but intentionally have no owner and are not shown to any new account.
+
 `hashgen` remains available only as a standalone utility:
 
 ```bash

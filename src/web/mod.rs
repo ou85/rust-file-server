@@ -131,6 +131,10 @@ async fn create_user(
         auth_version: 1,
         role: UserRole::User,
         password_change_required: true,
+        encrypted_data_key: app
+            .crypto
+            .create_wrapped_user_key()
+            .map_err(|error| ApiError::internal("Create user encryption key", error))?,
     };
     app.metadata
         .create_user(&user)
@@ -197,7 +201,7 @@ async fn icon(
     State(app): State<Arc<App>>,
     Path(name): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    require_user(&jar, &app)?;
+    let _user = active_user(&jar, &app)?;
     let (bytes, content_type) = match name.as_str() {
         "cancel.png" => (
             include_bytes!("../../assets/icons/cancel.png").as_slice(),
@@ -400,13 +404,13 @@ async fn list_files(
     State(app): State<Arc<App>>,
     query: Result<Query<FileListQuery>, QueryRejection>,
 ) -> ApiResult<Json<FileListResponse>> {
-    require_user(&jar, &app)?;
+    let user = active_user(&jar, &app)?;
     let Query(query) = query.map_err(|error| ApiError::RequestRejected {
         status: error.status(),
         message: error.body_text(),
     })?;
 
-    match app.list_files() {
+    match app.list_files_for_user(&user) {
         Ok(mut files) => {
             let search = query.search.unwrap_or_default().to_lowercase();
             files.retain(|file| file.filename.to_lowercase().contains(&search));
@@ -448,12 +452,10 @@ async fn get_file(
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> ApiResult<Json<Option<FileMetadata>>> {
-    if let Err(e) = require_user(&jar, &app) {
-        return Err(e);
-    }
-    Ok(Json(app.get_file(&id).map_err(|error| {
-        ApiError::internal("Read file metadata", error)
-    })?))
+    let user = active_user(&jar, &app)?;
+    Ok(Json(app.get_file_for_user(&user, &id).map_err(
+        |error| ApiError::internal("Read file metadata", error),
+    )?))
 }
 
 async fn delete_file(
@@ -461,8 +463,8 @@ async fn delete_file(
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    require_user(&jar, &app)?;
-    app.delete_file(&id)
+    let user = active_user(&jar, &app)?;
+    app.delete_file_for_user(&user, &id)
         .map_err(|error| ApiError::internal("Delete file", error))?;
     tracing::info!(file_id = %id, "File deleted");
     Ok(Json(json!({"deleted": true, "id": id})))
@@ -473,7 +475,7 @@ async fn delete_files(
     State(app): State<Arc<App>>,
     request: Result<Json<BulkDeleteRequest>, JsonRejection>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    require_user(&jar, &app)?;
+    let user = active_user(&jar, &app)?;
     let Json(request) = request.map_err(|error| ApiError::RequestRejected {
         status: error.status(),
         message: error.body_text(),
@@ -486,7 +488,7 @@ async fn delete_files(
 
     let mut deleted = Vec::with_capacity(request.ids.len());
     for id in request.ids {
-        app.delete_file(&id)
+        app.delete_file_for_user(&user, &id)
             .map_err(|error| ApiError::internal("Delete selected file", error))?;
         deleted.push(id);
     }
@@ -494,8 +496,8 @@ async fn delete_files(
     Ok(Json(json!({ "deleted": deleted })))
 }
 
-fn lookup_file(app: &App, id: &str) -> ApiResult<FileMetadata> {
-    app.get_file(id)
+fn lookup_file(app: &App, user: &UserAccount, id: &str) -> ApiResult<FileMetadata> {
+    app.get_file_for_user(user, id)
         .map_err(|error| ApiError::internal("Read file metadata", error))?
         .ok_or(ApiError::NotFound("File not found"))
 }
@@ -505,13 +507,11 @@ async fn download_file(
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> ApiResult<impl IntoResponse> {
-    if let Err(e) = require_user(&jar, &app) {
-        return Err(e);
-    }
+    let user = active_user(&jar, &app)?;
 
-    let metadata = lookup_file(&app, &id)?;
+    let metadata = lookup_file(&app, &user, &id)?;
     let chunks = app
-        .export_chunked(&id)
+        .export_chunked_for_user(&user, &id)
         .map_err(|error| ApiError::internal("Open file for download", error))?;
 
     // Get streams from chunks
@@ -533,11 +533,8 @@ async fn open_file(
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> ApiResult<impl IntoResponse> {
-    if let Err(e) = require_user(&jar, &app) {
-        return Err(e);
-    }
-
-    let metadata = lookup_file(&app, &id)?;
+    let user = active_user(&jar, &app)?;
+    let metadata = lookup_file(&app, &user, &id)?;
 
     Ok(Redirect::to(&format!("/files/{}/stream", metadata.id)).into_response())
 }
@@ -547,8 +544,8 @@ async fn video_player(
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
 ) -> ApiResult<impl IntoResponse> {
-    require_user(&jar, &app)?;
-    let metadata = lookup_file(&app, &id)?;
+    let user = active_user(&jar, &app)?;
+    let metadata = lookup_file(&app, &user, &id)?;
     let mime = blob_store::guess_mime(&metadata.filename);
     if !mime.starts_with("video/") {
         return Err(ApiError::NotFound("Video file not found"));
@@ -596,7 +593,7 @@ async fn upload_files(
     State(app): State<Arc<App>>,
     multipart: Result<Multipart, MultipartRejection>,
 ) -> ApiResult<Json<Vec<FileMetadata>>> {
-    require_user(&jar, &app)?;
+    let user = active_user(&jar, &app)?;
     let mut multipart = multipart.map_err(|error| ApiError::RequestRejected {
         status: error.status(),
         message: error.body_text(),
@@ -619,8 +616,10 @@ async fn upload_files(
             .storage
             .create_file_writer(&id)
             .map_err(|error| ApiError::internal("Create upload file", error))?;
-        let mut encryptor = app
-            .crypto
+        let crypto = app
+            .user_crypto(&user)
+            .map_err(|error| ApiError::internal("Unlock user encryption key", error))?;
+        let mut encryptor = crypto
             .start_encryption(&id)
             .map_err(|error| ApiError::internal("Initialize upload encryption", error))?;
         file.write_all(encryptor.header())
@@ -674,6 +673,7 @@ async fn upload_files(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|error| ApiError::internal("Read current time", error))?
                 .as_secs(),
+            owner_id: Some(user.id.clone()),
         };
 
         // Publish only a fully synced encrypted file. Startup cleanup removes a blob
@@ -726,17 +726,15 @@ fn session_user(jar: &CookieJar, app: &App) -> ApiResult<crate::domain::UserAcco
         .ok_or(ApiError::Forbidden)
 }
 
+fn active_user(jar: &CookieJar, app: &App) -> ApiResult<UserAccount> {
+    let account = session_user(jar, app)?;
+    (account.role == UserRole::User && !account.password_change_required)
+        .then_some(account)
+        .ok_or(ApiError::Forbidden)
+}
+
 fn require_user(jar: &CookieJar, app: &App) -> ApiResult<()> {
-    (matches!(
-        session_user(jar, app)?,
-        UserAccount {
-            role: UserRole::User,
-            password_change_required: false,
-            ..
-        }
-    ))
-    .then_some(())
-    .ok_or(ApiError::Forbidden)
+    active_user(jar, app).map(|_| ())
 }
 
 fn require_admin(jar: &CookieJar, app: &App) -> ApiResult<()> {
@@ -751,11 +749,8 @@ async fn stream_file(
     State(app): State<Arc<App>>,
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
-    if let Err(e) = require_user(&jar, &app) {
-        return Err(e);
-    }
-
-    let metadata = lookup_file(&app, &id)?;
+    let user = active_user(&jar, &app)?;
+    let metadata = lookup_file(&app, &user, &id)?;
 
     let file_size = metadata.size;
     let mime = blob_store::guess_mime(&metadata.filename);
@@ -774,7 +769,7 @@ async fn stream_file(
             let length = end - start + 1;
 
             let chunks = app
-                .export_range(&id, start, end)
+                .export_range_for_user(&user, &id, start, end)
                 .map_err(|error| ApiError::internal("Open file range", error))?;
 
             let stream = futures::stream::iter(chunks.map(|chunk| {
@@ -809,7 +804,7 @@ async fn stream_file(
 
     // Full file without Range
     let chunks = app
-        .export_chunked(&id)
+        .export_chunked_for_user(&user, &id)
         .map_err(|error| ApiError::internal("Open file stream", error))?;
 
     let stream =
@@ -982,6 +977,7 @@ mod tests {
                 auth_version: 1,
                 role: UserRole::User,
                 password_change_required: false,
+                encrypted_data_key: app.crypto.create_wrapped_user_key().unwrap(),
             })
             .unwrap();
         (app, dir)
@@ -1001,6 +997,20 @@ mod tests {
             "rfs_session={}",
             app.sessions
                 .create(&app.metadata.get_user_by_username("admin").unwrap().unwrap())
+                .unwrap()
+        )
+    }
+
+    fn account_cookie(app: &App, username: &str) -> String {
+        format!(
+            "rfs_session={}",
+            app.sessions
+                .create(
+                    &app.metadata
+                        .get_user_by_username(username)
+                        .unwrap()
+                        .unwrap()
+                )
                 .unwrap()
         )
     }
@@ -1054,6 +1064,7 @@ mod tests {
                 filename: "video.mp4".into(),
                 size: 10,
                 created_at: 0,
+                owner_id: Some("test-user".into()),
             })
             .unwrap();
         app.metadata.insert_invalid_record("corrupt");
@@ -1281,6 +1292,7 @@ mod tests {
                     filename: format!("item-{index:02}.txt"),
                     size: index,
                     created_at: index,
+                    owner_id: Some("test-user".into()),
                 })
                 .unwrap();
         }
@@ -1315,6 +1327,7 @@ mod tests {
                 filename: "movie<demo>.mp4".into(),
                 size: 123,
                 created_at: 1,
+                owner_id: Some("test-user".into()),
             })
             .unwrap();
         let response = create_router(app.clone())
@@ -1476,6 +1489,7 @@ mod tests {
             auth_version: 1,
             role: UserRole::User,
             password_change_required: true,
+            encrypted_data_key: app.crypto.create_wrapped_user_key().unwrap(),
         };
         app.metadata.create_user(&account).unwrap();
         let old_cookie = format!("rfs_session={}", app.sessions.create(&account).unwrap());
@@ -1546,6 +1560,75 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn users_cannot_list_or_download_each_others_encrypted_files() {
+        let (app, dir) = test_app();
+        app.metadata
+            .create_user(&UserAccount {
+                id: "second-user".into(),
+                username: "second".into(),
+                password_hash: hash_password("second-user-password").unwrap(),
+                auth_version: 1,
+                role: UserRole::User,
+                password_change_required: false,
+                encrypted_data_key: app.crypto.create_wrapped_user_key().unwrap(),
+            })
+            .unwrap();
+        let boundary = "owner-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"private.txt\"\r\n\r\nprivate content\r\n--{boundary}--\r\n"
+        );
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/files/upload")
+                    .header("cookie", user_cookie(&app))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let uploaded: Vec<FileMetadata> =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let id = &uploaded[0].id;
+        assert_eq!(uploaded[0].owner_id.as_deref(), Some("test-user"));
+
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/files")
+                    .header("cookie", account_cookie(&app, "second"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let list: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(list["total"], 0);
+
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/files/{id}/download"))
+                    .header("cookie", account_cookie(&app, "second"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
         fs::remove_dir_all(dir).unwrap();
     }
 }

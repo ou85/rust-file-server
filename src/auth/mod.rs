@@ -109,6 +109,7 @@ mod tests {
             auth_version: 7,
             role: UserRole::User,
             password_change_required: false,
+            encrypted_data_key: "unused-in-auth-test".into(),
         }
     }
 

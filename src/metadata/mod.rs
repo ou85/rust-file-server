@@ -223,6 +223,27 @@ impl MetadataStore {
         Ok(files)
     }
 
+    pub fn get_file_for_owner(
+        &self,
+        id: &str,
+        owner_id: &str,
+    ) -> Result<Option<FileMetadata>, Box<dyn std::error::Error>> {
+        Ok(self
+            .get_file(id)?
+            .filter(|file| file.owner_id.as_deref() == Some(owner_id)))
+    }
+
+    pub fn list_files_for_owner(
+        &self,
+        owner_id: &str,
+    ) -> Result<Vec<FileMetadata>, Box<dyn std::error::Error>> {
+        Ok(self
+            .list_files()?
+            .into_iter()
+            .filter(|file| file.owner_id.as_deref() == Some(owner_id))
+            .collect())
+    }
+
     pub fn delete_file(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
         let transaction = self.db.begin_write()?;
         {

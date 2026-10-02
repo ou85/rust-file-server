@@ -14,6 +14,8 @@ pub struct FileMetadata {
     pub filename: String,
     pub size: u64,
     pub created_at: u64,
+    #[serde(default)]
+    pub owner_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -59,6 +61,7 @@ pub struct UserAccount {
     pub auth_version: u64,
     pub role: UserRole,
     pub password_change_required: bool,
+    pub encrypted_data_key: String,
 }
 
 #[derive(Serialize)]

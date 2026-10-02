@@ -40,6 +40,61 @@ impl Crypto {
         Ok(output)
     }
 
+    /// Creates a random, per-user data-encryption key wrapped by the server key.
+    pub fn create_wrapped_user_key(&self) -> io::Result<String> {
+        let mut key = [0u8; 32];
+        rand::rng().fill_bytes(&mut key);
+        let mut nonce = [0u8; 12];
+        rand::rng().fill_bytes(&mut nonce);
+        let cipher = Aes256Gcm::new_from_slice(&self.master_key).expect("valid master key");
+        let encrypted = cipher
+            .encrypt(
+                &Nonce::try_from(nonce.as_slice()).expect("12-byte nonce"),
+                key.as_slice(),
+            )
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let mut payload = nonce.to_vec();
+        payload.extend_from_slice(&encrypted);
+        Ok(base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            payload,
+        ))
+    }
+
+    /// Returns a crypto context limited to one user's independent data key.
+    pub fn for_wrapped_user_key(&self, wrapped: &str) -> io::Result<Self> {
+        let payload = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, wrapped)
+            .map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "invalid user encryption key")
+        })?;
+        if payload.len() != 12 + 32 + 16 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid user encryption key",
+            ));
+        }
+        let cipher = Aes256Gcm::new_from_slice(&self.master_key).expect("valid master key");
+        let key = cipher
+            .decrypt(
+                &Nonce::try_from(&payload[..12]).expect("12-byte nonce"),
+                &payload[12..],
+            )
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "cannot unlock user encryption key",
+                )
+            })?;
+        let master_key: [u8; 32] = key.try_into().map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "invalid user encryption key")
+        })?;
+        let legacy_hash = Sha256::digest(master_key);
+        Ok(Self {
+            master_key,
+            legacy_cipher: Aes256Gcm::new_from_slice(&legacy_hash).expect("valid SHA-256 key"),
+        })
+    }
+
     pub fn start_encryption(&self, file_id: &str) -> io::Result<Encryptor> {
         let mut salt = [0u8; 16];
         rand::rng().fill_bytes(&mut salt);
@@ -141,6 +196,28 @@ mod tests {
         let (_, _, wrong_cipher) = crypto.parse_cipher("file-b", &encrypted).unwrap();
         assert!(
             wrong_cipher
+                .decrypt(
+                    &Nonce::try_from(nonce.as_slice()).unwrap(),
+                    &encrypted[offset + 12..]
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn users_receive_distinct_keys_that_cannot_decrypt_each_others_files() {
+        let crypto = Crypto::new(KEY).unwrap();
+        let first = crypto
+            .for_wrapped_user_key(&crypto.create_wrapped_user_key().unwrap())
+            .unwrap();
+        let second = crypto
+            .for_wrapped_user_key(&crypto.create_wrapped_user_key().unwrap())
+            .unwrap();
+        let encrypted = first.encrypt_chunked("file-a", b"only first user").unwrap();
+        let (offset, _, cipher) = second.parse_cipher("file-a", &encrypted).unwrap();
+        let nonce: [u8; 12] = encrypted[offset..offset + 12].try_into().unwrap();
+        assert!(
+            cipher
                 .decrypt(
                     &Nonce::try_from(nonce.as_slice()).unwrap(),
                     &encrypted[offset + 12..]

@@ -47,7 +47,7 @@ impl App {
         admin_password: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         validate_username(admin_username)?;
-        let (_, metadata, _) = Self::prepare(config)?;
+        let (_, metadata, crypto) = Self::prepare(config)?;
         if metadata.user_count()? != 0 {
             return Err("Server is already initialized".into());
         }
@@ -58,6 +58,7 @@ impl App {
             auth_version: 1,
             role: UserRole::Admin,
             password_change_required: false,
+            encrypted_data_key: crypto.create_wrapped_user_key()?,
         };
         metadata.create_user(&account)?;
         let legacy_files = metadata.legacy_file_count()?;
@@ -87,6 +88,10 @@ impl App {
             return Ok(None);
         };
         Ok((account.role == role && account.auth_version == auth_version).then_some(account))
+    }
+
+    pub fn user_crypto(&self, user: &UserAccount) -> Result<Crypto, Box<dyn std::error::Error>> {
+        Ok(self.crypto.for_wrapped_user_key(&user.encrypted_data_key)?)
     }
 
     pub fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
@@ -149,6 +154,7 @@ impl App {
             filename: file.filename.clone(),
             size: file.content.len() as u64,
             created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+            owner_id: None,
         };
 
         self.storage.save_file(&file, &self.crypto)?;
@@ -160,15 +166,28 @@ impl App {
         Ok(metadata)
     }
 
-    pub fn get_file(&self, id: &str) -> Result<Option<FileMetadata>, Box<dyn std::error::Error>> {
-        self.metadata.get_file(id)
-    }
-
     pub fn list_files(&self) -> Result<Vec<FileMetadata>, Box<dyn std::error::Error>> {
         let mut files = self.metadata.list_files()?;
 
         files.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
+        Ok(files)
+    }
+
+    pub fn get_file_for_user(
+        &self,
+        user: &UserAccount,
+        id: &str,
+    ) -> Result<Option<FileMetadata>, Box<dyn std::error::Error>> {
+        self.metadata.get_file_for_owner(id, &user.id)
+    }
+
+    pub fn list_files_for_user(
+        &self,
+        user: &UserAccount,
+    ) -> Result<Vec<FileMetadata>, Box<dyn std::error::Error>> {
+        let mut files = self.metadata.list_files_for_owner(&user.id)?;
+        files.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         Ok(files)
     }
 
@@ -185,6 +204,17 @@ impl App {
         Ok(())
     }
 
+    pub fn delete_file_for_user(
+        &self,
+        user: &UserAccount,
+        id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if self.get_file_for_user(user, id)?.is_none() {
+            return Err("File not found".into());
+        }
+        self.delete_file(id)
+    }
+
     pub fn demo(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let metadata = self.import_file(path)?;
 
@@ -198,19 +228,30 @@ impl App {
     }
 
     /// For download/stream - returns an iterator over chunks
-    pub fn export_chunked(&self, id: &str) -> Result<ChunkIterator, Box<dyn std::error::Error>> {
-        Ok(self.storage.stream_chunks(id, &self.crypto)?)
+    pub fn export_chunked_for_user(
+        &self,
+        user: &UserAccount,
+        id: &str,
+    ) -> Result<ChunkIterator, Box<dyn std::error::Error>> {
+        if self.get_file_for_user(user, id)?.is_none() {
+            return Err("File not found".into());
+        }
+        Ok(self.storage.stream_chunks(id, &self.user_crypto(user)?)?)
     }
 
-    pub fn export_range(
+    pub fn export_range_for_user(
         &self,
+        user: &UserAccount,
         id: &str,
         byte_start: u64,
         byte_end: u64,
     ) -> Result<RangeChunkIterator, Box<dyn std::error::Error>> {
+        if self.get_file_for_user(user, id)?.is_none() {
+            return Err("File not found".into());
+        }
         Ok(self
             .storage
-            .stream_chunks_range(id, &self.crypto, byte_start, byte_end)?)
+            .stream_chunks_range(id, &self.user_crypto(user)?, byte_start, byte_end)?)
     }
 }
 
