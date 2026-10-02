@@ -25,3 +25,10 @@ pub struct LoginRequest {
 pub struct BulkDeleteRequest {
     pub ids: Vec<String>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthRecord {
+    pub username: String,
+    pub password_hash: String,
+    pub auth_version: u64,
+}

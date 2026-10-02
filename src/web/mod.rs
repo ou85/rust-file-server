@@ -172,10 +172,11 @@ fn directory_size(path: &std::path::Path) -> std::io::Result<u64> {
 }
 
 pub async fn root(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoResponse {
-    match jar
-        .get("rfs_session")
-        .and_then(|cookie| app.sessions.role(cookie.value()))
-    {
+    match jar.get("rfs_session").and_then(|cookie| {
+        app.auth_record()
+            .ok()
+            .and_then(|record| app.sessions.role(cookie.value(), record.auth_version))
+    }) {
         Some(UserRole::User) => Html(include_str!("../../assets/ui.html")).into_response(),
 
         Some(UserRole::Admin) => Html(include_str!("../../assets/admin.html")).into_response(),
@@ -196,12 +197,46 @@ async fn login(
         status: error.status(),
         message: error.body_text(),
     })?;
-    match authenticate(&req.username, &req.password, &app.config) {
-        Some(role) => {
+    let mut user_record = if req.username == "user" {
+        Some(
+            app.auth_record()
+                .map_err(|error| ApiError::internal("Read authentication record", error))?,
+        )
+    } else {
+        None
+    };
+    let authenticated = if let Some(record) = user_record.as_ref() {
+        crate::auth::verify_password(&req.password, record)
+    } else {
+        authenticate(&req.username, &req.password, &app.config).is_some()
+    };
+    match authenticated {
+        true => {
+            let role = if req.username == "user" {
+                UserRole::User
+            } else {
+                UserRole::Admin
+            };
+            let auth_version = if let Some(record) = user_record.as_mut() {
+                if !crate::auth::is_argon2_hash(record) {
+                    record.password_hash = crate::auth::hash_password(&req.password)
+                        .map_err(|error| ApiError::internal("Upgrade password hash", error))?;
+                    record.auth_version = record.auth_version.saturating_add(1);
+                    app.metadata.save_auth_record(record).map_err(|error| {
+                        ApiError::internal("Save upgraded password hash", error)
+                    })?;
+                    tracing::info!("Legacy password hash upgraded to Argon2id");
+                }
+                record.auth_version
+            } else {
+                app.auth_record()
+                    .map_err(|error| ApiError::internal("Read authentication record", error))?
+                    .auth_version
+            };
             tracing::info!(?role, "Login succeeded");
             let token = app
                 .sessions
-                .create(role)
+                .create(role, auth_version)
                 .map_err(|error| ApiError::internal("Create session", error))?;
 
             Ok((
@@ -214,7 +249,7 @@ async fn login(
                 .into_response())
         }
 
-        None => {
+        false => {
             tracing::warn!("Login failed");
 
             Err(ApiError::Unauthorized)
@@ -547,10 +582,11 @@ async fn logout(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoRespons
 }
 
 fn require_user(jar: &CookieJar, app: &App) -> ApiResult<()> {
-    match jar
-        .get("rfs_session")
-        .and_then(|cookie| app.sessions.role(cookie.value()))
-    {
+    match jar.get("rfs_session").and_then(|cookie| {
+        app.auth_record()
+            .ok()
+            .and_then(|record| app.sessions.role(cookie.value(), record.auth_version))
+    }) {
         Some(UserRole::User) => Ok(()),
         _ => Err(ApiError::Forbidden),
     }
@@ -777,10 +813,11 @@ mod tests {
                 &base64::engine::general_purpose::STANDARD,
                 [7u8; 32],
             ),
+            bootstrap_password: Some("test-password".into()),
             user_name: "user".into(),
             admin_name: "admin".into(),
-            user_password_hash: String::new(),
-            admin_password_hash: String::new(),
+            user_password_hash: None,
+            admin_password_hash: None,
             bind_address: "127.0.0.1:0".into(),
         };
         (Arc::new(App::new(config).unwrap()), dir)
@@ -789,7 +826,7 @@ mod tests {
     fn user_cookie(app: &App) -> String {
         format!(
             "rfs_session={}",
-            app.sessions.create(UserRole::User).unwrap()
+            app.sessions.create(UserRole::User, 1).unwrap()
         )
     }
     #[test]

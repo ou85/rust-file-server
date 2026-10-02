@@ -46,6 +46,30 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("hashgen") => {
             hashgen::run(None)?;
         }
+        Some("password") => {
+            let reset = matches!(args.get(2).map(String::as_str), Some("reset"));
+            if !reset && !matches!(args.get(2).map(String::as_str), Some("change")) {
+                return Err("Usage: password change|reset [--local] [--data-dir <PATH>]".into());
+            }
+            let config = config::Config::from_args(&args[3..])?;
+            let app = App::new(config)?;
+            use std::io::{self, Write};
+            let current = if reset {
+                None
+            } else {
+                print!("Current password: ");
+                io::stdout().flush()?;
+                let mut value = String::new();
+                io::stdin().read_line(&mut value)?;
+                Some(value.trim().to_string())
+            };
+            print!("New password (minimum 12 characters): ");
+            io::stdout().flush()?;
+            let mut next = String::new();
+            io::stdin().read_line(&mut next)?;
+            auth::change_password(&app.metadata, current.as_deref(), next.trim())?;
+            println!("Password changed. Existing sessions are now invalid.");
+        }
         Some("demo") => {
             let config = config::Config::from_args(&args[2..])?;
             let app = App::new(config)?;

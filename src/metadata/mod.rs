@@ -1,7 +1,12 @@
-use crate::{config::Config, domain::FileMetadata};
+use crate::{
+    config::Config,
+    domain::{AuthRecord, FileMetadata},
+};
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
 const FILES: TableDefinition<&str, &str> = TableDefinition::new("files");
+const AUTH: TableDefinition<&str, &str> = TableDefinition::new("auth");
+const AUTH_KEY: &str = "user";
 
 pub struct MetadataStore {
     db: Database,
@@ -25,12 +30,34 @@ impl MetadataStore {
 
         {
             let _table = write_txn.open_table(FILES)?;
+            let _auth = write_txn.open_table(AUTH)?;
         }
         write_txn.commit()?;
 
         tracing::info!("Database initialized");
 
         Ok(Self { db })
+    }
+
+    pub fn auth_record(&self) -> Result<Option<AuthRecord>, Box<dyn std::error::Error>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(AUTH)?;
+        table
+            .get(AUTH_KEY)?
+            .map(|value| serde_json::from_str(value.value()))
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub fn save_auth_record(&self, record: &AuthRecord) -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_string(record)?;
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(AUTH)?;
+            table.insert(AUTH_KEY, json.as_str())?;
+        }
+        txn.commit()?;
+        Ok(())
     }
 
     pub fn save_file(&self, metadata: &FileMetadata) -> Result<(), Box<dyn std::error::Error>> {

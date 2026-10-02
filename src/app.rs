@@ -1,9 +1,9 @@
 use crate::{
-    auth::SessionStore,
+    auth::{SessionStore, hash_password},
     blob_store::{ChunkIterator, RangeChunkIterator, Storage},
     config::Config,
     crypto::Crypto,
-    domain::FileMetadata,
+    domain::{AuthRecord, FileMetadata},
     metadata::MetadataStore,
 };
 
@@ -25,6 +25,12 @@ pub struct App {
 }
 
 impl App {
+    pub fn auth_record(&self) -> Result<crate::domain::AuthRecord, Box<dyn std::error::Error>> {
+        self.metadata
+            .auth_record()?
+            .ok_or_else(|| "User account is not initialized".into())
+    }
+
     pub fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
         ensure_dir_exists(&config.data_dir)?;
         ensure_dir_exists(&config.blobs_dir)?;
@@ -35,6 +41,26 @@ impl App {
             config.tmp_dir.clone(),
         )?);
         let metadata = MetadataStore::new(&config)?;
+        if metadata.auth_record()?.is_none() {
+            let password_hash = match config.bootstrap_password.as_deref() {
+                Some(password) if password.trim().len() >= 12 => {
+                    hash_password(password).map_err(|error| error.to_string())?
+                }
+                Some(_) => {
+                    return Err("RFS_BOOTSTRAP_PASSWORD must contain at least 12 characters".into());
+                }
+                None => config
+                    .user_password_hash
+                    .clone()
+                    .ok_or("RFS_BOOTSTRAP_PASSWORD is required for first startup")?,
+            };
+            metadata.save_auth_record(&AuthRecord {
+                username: "user".into(),
+                password_hash,
+                auth_version: 1,
+            })?;
+            tracing::info!("Initial user account created");
+        }
         let crypto = Crypto::new(&config.encryption_key)?;
 
         match storage.cleanup_all_tmp_files() {

@@ -123,9 +123,24 @@ Add the Base64 key to your .env file:
 RFS_ENCRYPTION_KEY=a3f9x2k8mL9pQwErT5yUiOp2sD4fGhJkLmNoPqRs==
 ```
 
-### Password Hash Generation (hashgen)
+### Password initialization and rotation
 
-Generate bcrypt password hashes for user and admin authentication.
+On the first startup, set `RFS_BOOTSTRAP_PASSWORD`. It is used once to create the
+user account in `metadata.redb`; subsequent changes to `.env` do not change the
+password used by the server. Remove the variable after initialization.
+
+Stop the server before running local password commands:
+
+```bash
+cargo run -- password change --data-dir ./data
+cargo run -- password reset --data-dir ./data
+```
+
+`change` requires the current password. `reset` is a local recovery operation and
+requires filesystem access to the data directory. Both commands create an Argon2id
+hash and revoke existing sessions by increasing the authentication version.
+
+The old `hashgen` command remains available for migrating legacy installations.
 
 Usage:
 ```bash
@@ -143,11 +158,10 @@ Output:
 Bcrypt hash: $2b$12$5QU3Tl1gcmEyFZL/ahdBHOU14UMQYRDkwvrVZufE8.QolJEmMva0e
 ```
 
-Add the hash to your .env file, wrapped in double quotes or single quotes '...HASH...' to prevent shell interpolation of the $ symbol:
+For legacy installations only, this hash can be used as a one-time migration value:
 ```env
 
 RFS_USER_PASSWORD_HASH='$2b$12$5QU3Tl1gcmEyFZL/ahdBHOU14UMQYRDkwvrVZufE8.QolJEmMva0e'
-RFS_ADMIN_PASSWORD_HASH=\$2b\$12\$...
 ```
 ⚠️ Important: Always enclose bcrypt hashes in double quotes in .env files to avoid truncation caused by $ symbol expansion.  ( in some cases single quotes works better )
 
