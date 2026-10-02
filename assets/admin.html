@@ -23,7 +23,7 @@
   <header><div><h1>RSFS</h1><p>Administrator Control Panel</p></div><button class="logout" onclick="logout()">Log out</button></header>
   <section class="card"><h2>Users</h2>
     <form id="create-user"><input id="username" required minlength="3" maxlength="64" placeholder="Username" autocomplete="off"><input id="password" required minlength="8" type="password" placeholder="Temporary password" autocomplete="new-password"><button class="primary">Create user</button></form>
-    <table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody id="users"></tbody></table>
+    <table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th style="text-align: right;">Actions</th></tr></thead><tbody id="users"></tbody></table>
     <div id="message" class="message" role="status"></div>
   </section>
 </main>
