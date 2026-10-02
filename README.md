@@ -136,8 +136,9 @@ cargo run -- password change --data-dir ./data
 cargo run -- password reset --data-dir ./data
 ```
 
-`change` requires the current password. `reset` is a local recovery operation and
-requires filesystem access to the data directory. Both commands create an Argon2id
+`change` requires the current password. Passwords must contain at least 8 characters.
+`reset` is a local recovery operation and requires filesystem access to the data directory.
+Both commands create an Argon2id
 hash and revoke existing sessions by increasing the authentication version.
 
 The old `hashgen` command remains available for migrating legacy installations.

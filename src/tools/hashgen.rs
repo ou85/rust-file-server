@@ -1,16 +1,9 @@
 use bcrypt::{DEFAULT_COST, hash};
-use std::io::{self, Write};
 
 pub fn run(password: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let password = match password {
         Some(p) => p,
-        None => {
-            print!("\n==> Enter new `user` password: ");
-            io::stdout().flush()?;
-            let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
-            input.trim().to_string()
-        }
+        None => super::password::prompt("\n==> Enter new `user` password: ")?,
     };
 
     let hashed = hash(&password, DEFAULT_COST)?;

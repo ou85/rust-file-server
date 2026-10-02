@@ -43,11 +43,15 @@ impl App {
         let metadata = MetadataStore::new(&config)?;
         if metadata.auth_record()?.is_none() {
             let password_hash = match config.bootstrap_password.as_deref() {
-                Some(password) if password.trim().len() >= 12 => {
+                Some(password) if password.trim().len() >= crate::auth::MIN_PASSWORD_LEN => {
                     hash_password(password).map_err(|error| error.to_string())?
                 }
                 Some(_) => {
-                    return Err("RFS_BOOTSTRAP_PASSWORD must contain at least 12 characters".into());
+                    return Err(format!(
+                        "RFS_BOOTSTRAP_PASSWORD must contain at least {} characters",
+                        crate::auth::MIN_PASSWORD_LEN
+                    )
+                    .into());
                 }
                 None => config
                     .user_password_hash

@@ -53,21 +53,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             let config = config::Config::from_args(&args[3..])?;
             let app = App::new(config)?;
-            use std::io::{self, Write};
             let current = if reset {
                 None
             } else {
-                print!("Current password: ");
-                io::stdout().flush()?;
-                let mut value = String::new();
-                io::stdin().read_line(&mut value)?;
-                Some(value.trim().to_string())
+                Some(tools::password::prompt("Current password: ")?)
             };
-            print!("New password (minimum 12 characters): ");
-            io::stdout().flush()?;
-            let mut next = String::new();
-            io::stdin().read_line(&mut next)?;
-            auth::change_password(&app.metadata, current.as_deref(), next.trim())?;
+            let next = tools::password::prompt(format!(
+                "New password (minimum {} characters): ",
+                auth::MIN_PASSWORD_LEN
+            ))?;
+            auth::change_password(&app.metadata, current.as_deref(), &next)?;
             println!("Password changed. Existing sessions are now invalid.");
         }
         Some("demo") => {

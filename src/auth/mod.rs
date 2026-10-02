@@ -7,6 +7,8 @@ use bcrypt::verify as bcrypt_verify;
 use rand::Rng;
 use std::{collections::HashMap, sync::Mutex};
 
+pub const MIN_PASSWORD_LEN: usize = 8;
+
 pub fn authenticate(username: &str, password: &str, config: &Config) -> Option<UserRole> {
     match username {
         u if u == config.user_name => {
@@ -68,8 +70,8 @@ pub fn change_password(
     current: Option<&str>,
     next: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if next.trim().len() < 12 {
-        return Err("Password must contain at least 12 characters".into());
+    if next.trim().len() < MIN_PASSWORD_LEN {
+        return Err(format!("Password must contain at least {MIN_PASSWORD_LEN} characters").into());
     }
     let mut record = metadata
         .auth_record()?
