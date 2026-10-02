@@ -72,6 +72,7 @@ impl App {
             ("", "")
         };
         let mut output = stdout.lock();
+        writeln!(output)?;
         writeln!(output, "──────────────────────────────")?;
         writeln!(output, "rust-file-server v{}", env!("CARGO_PKG_VERSION"))?;
         writeln!(output, "──────────────────────────────")?;
