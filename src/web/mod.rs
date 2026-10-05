@@ -79,6 +79,7 @@ pub fn create_router(state: Arc<App>) -> Router {
         .route("/files", get(list_files).delete(delete_files))
         .route("/files/{id}", get(get_file))
         .route("/files/upload", post(upload_files))
+        .route("/uploads/{id}/cancel", post(cancel_upload))
         .layer(DefaultBodyLimit::disable())
         .route("/files/{id}", delete(delete_file))
         .route("/files/{id}/open", get(open_file))
@@ -591,9 +592,36 @@ fn escape_html(value: &str) -> String {
 async fn upload_files(
     jar: CookieJar,
     State(app): State<Arc<App>>,
+    headers: HeaderMap,
     multipart: Result<Multipart, MultipartRejection>,
 ) -> ApiResult<Json<Vec<FileMetadata>>> {
     let user = active_user(&jar, &app)?;
+    let upload_id = headers
+        .get("x-upload-id")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            if valid_upload_id(value) {
+                Ok(value.to_owned())
+            } else {
+                Err(ApiError::BadRequest("Invalid upload identifier".into()))
+            }
+        })
+        .transpose()?
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    if !app
+        .register_upload(&upload_id, &user.id)
+        .map_err(|error| ApiError::internal("Register upload", error))?
+    {
+        return Err(ApiError::BadRequest(
+            "Upload identifier is already active".into(),
+        ));
+    }
+    let _upload_guard = UploadCleanup {
+        app: app.clone(),
+        upload_id: upload_id.clone(),
+        blob_ids: Vec::new(),
+        keep_files: false,
+    };
     let mut multipart = multipart.map_err(|error| ApiError::RequestRejected {
         status: error.status(),
         message: error.body_text(),
@@ -606,11 +634,22 @@ async fn upload_files(
         .await
         .map_err(|error| ApiError::BadRequest(format!("Multipart error: {error}")))?
     {
+        if !uploaded.is_empty() {
+            return Err(ApiError::BadRequest("Upload one file per request".into()));
+        }
         use crate::crypto::CHUNK_SIZE;
         use std::io::Write;
 
         let filename = field.file_name().unwrap_or("unknown").to_string();
         let id = crate::domain::id::id_16();
+        // Keep track immediately so cancellation or a disconnected client removes partial data.
+        // SAFETY: this guard owns the upload lifecycle until the metadata transaction commits.
+        let mut cleanup = UploadCleanup {
+            app: app.clone(),
+            upload_id: String::new(),
+            blob_ids: vec![id.clone()],
+            keep_files: false,
+        };
 
         let mut file = app
             .storage
@@ -634,6 +673,12 @@ async fn upload_files(
             .await
             .map_err(|error| ApiError::BadRequest(format!("Multipart read error: {error}")))?
         {
+            if app
+                .upload_cancelled(&upload_id, &user.id)
+                .map_err(|error| ApiError::internal("Check upload cancellation", error))?
+            {
+                return Err(ApiError::BadRequest("Upload cancelled".into()));
+            }
             buffer.extend_from_slice(&bytes);
             total_bytes += bytes.len() as u64;
 
@@ -676,17 +721,21 @@ async fn upload_files(
             owner_id: Some(user.id.clone()),
         };
 
-        // Publish only a fully synced encrypted file. Startup cleanup removes a blob
-        // if the process later crashes before its metadata transaction succeeds.
-        app.storage
-            .finalize_file(&id)
+        // Hold the upload state lock through publication so cancellation cannot race commit.
+        let committed = app
+            .commit_upload(&upload_id, &user.id, || {
+                app.storage.finalize_file(&id)?;
+                if let Err(error) = app.metadata.save_file(&metadata) {
+                    let _ = app.storage.delete_file(&id);
+                    return Err(error);
+                }
+                Ok(())
+            })
             .map_err(|error| ApiError::internal("Publish upload", error))?;
-        if let Err(error) = app.metadata.save_file(&metadata) {
-            if let Err(cleanup_error) = app.storage.delete_file(&id) {
-                tracing::error!(file_id = %id, error = %cleanup_error, "Failed to clean up unpublished blob");
-            }
-            return Err(ApiError::internal("Save upload metadata", error));
+        if !committed {
+            return Err(ApiError::BadRequest("Upload cancelled".into()));
         }
+        cleanup.keep_files = true;
         tracing::info!(file_id = %id, bytes = total_bytes, "Upload completed");
 
         uploaded.push(metadata);
@@ -697,6 +746,56 @@ async fn upload_files(
     }
 
     Ok(Json(uploaded))
+}
+
+async fn cancel_upload(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let user = active_user(&jar, &app)?;
+    if !valid_upload_id(&id) {
+        return Err(ApiError::BadRequest("Invalid upload identifier".into()));
+    }
+    let cancelled = app
+        .cancel_upload(&id, &user.id)
+        .map_err(|error| ApiError::internal("Cancel upload", error))?
+        .unwrap_or(false);
+    Ok(Json(json!({ "cancelled": cancelled })))
+}
+
+fn valid_upload_id(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() || character == '-')
+}
+
+struct UploadCleanup {
+    app: Arc<App>,
+    upload_id: String,
+    blob_ids: Vec<String>,
+    keep_files: bool,
+}
+
+impl Drop for UploadCleanup {
+    fn drop(&mut self) {
+        if !self.keep_files {
+            for id in &self.blob_ids {
+                if let Err(error) = self.app.storage.delete_tmp_file(id) {
+                    tracing::warn!(file_id = %id, error = %error, "Could not remove cancelled upload temporary file");
+                }
+                if let Err(error) = self.app.storage.delete_file(id) {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(file_id = %id, error = %error, "Could not remove cancelled upload blob");
+                    }
+                }
+            }
+        }
+        if !self.upload_id.is_empty() {
+            self.app.remove_upload(&self.upload_id);
+        }
+    }
 }
 
 async fn logout(jar: CookieJar, State(app): State<Arc<App>>) -> impl IntoResponse {

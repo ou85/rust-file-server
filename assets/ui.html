@@ -201,10 +201,21 @@
         .queue-clear:hover, .queue-remove:hover { border-color: #d85b5b; color: #c73d3d; background: #fff7f7; }
         .queue-list { display: flex; flex-direction: column; gap: 6px; max-height: 360px; overflow-y: auto; }
         .queue-item { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 8px; background: #f5f5f3; }
+        .queue-item.uploading { align-items: flex-start; }
+        .queue-item-main { min-width: 0; flex: 1; }
         .queue-file-info { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
         .queue-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
         .queue-file-size { flex: none; color: #777; font-size: 12px; }
         .queue-remove { flex: none; height: 32px; padding: 0 10px; }
+        .queue-cancel { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 2rem; height: 2rem; padding: 0; border: 1px solid transparent; border-radius: 50%; background: #fff; cursor: pointer; }
+        .queue-cancel:hover { background: #f2f2f2; box-shadow: 0 0 0 .125rem #eeeeec; }
+        .queue-cancel:focus-visible { outline: 2px solid #75c995; outline-offset: 2px; }
+        .queue-cancel:disabled { opacity: .55; cursor: default; }
+        .queue-cancel img { width: 1.25rem; height: 1.25rem; object-fit: contain; }
+        .queue-status { margin-left: auto; color: #666; font-size: .78rem; white-space: nowrap; }
+        .queue-status.error { color: #c73d3d; }
+        .queue-item-progress { height: .25rem; margin-top: .45rem; overflow: hidden; border-radius: 1rem; background: #e3e3e0; }
+        .queue-item-progress span { display: block; height: 100%; width: 0; border-radius: inherit; background: #65db91; transition: width .1s linear; }
         .queue-upload { width: 100%; height: 38px; margin-top: 12px; border: 1px solid #348b50; border-radius: 8px; background: #43a563; color: #fff; font-weight: 600; cursor: pointer; }
         .queue-upload:hover { background: #378f54; }
         .file-toolbar { display: flex; gap: 12px; margin-top: 48px; }
@@ -539,6 +550,7 @@
         }
 
         let pendingFiles = [];
+        let uploadInProgress = false;
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('file');
         fileInput.addEventListener('change', () => addFiles(fileInput.files));
@@ -554,10 +566,11 @@
 
         function addFiles(files) {
             for (const file of files) {
-                const duplicate = pendingFiles.some(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified);
-                if (!duplicate) pendingFiles.push(file);
+                const duplicate = pendingFiles.some(item => item.file.name === file.name && item.file.size === file.size && item.file.lastModified === file.lastModified);
+                if (!duplicate) pendingFiles.push({ id: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`), file, status: 'queued', progress: 0, xhr: null, cancelRequested: false });
             }
             renderQueue();
+            fileInput.value = '';
         }
 
         function renderQueue() {
@@ -565,19 +578,58 @@
             const list = document.getElementById('queueList');
             list.replaceChildren();
             queue.classList.toggle('visible', pendingFiles.length > 0);
-            pendingFiles.forEach((file, index) => {
+            pendingFiles.forEach(entry => {
                 const row = document.createElement('div'); row.className = 'queue-item';
+                if (entry.status === 'uploading') row.classList.add('uploading');
+                const main = document.createElement('div'); main.className = 'queue-item-main';
                 const info = document.createElement('div'); info.className = 'queue-file-info';
-                const name = document.createElement('span'); name.className = 'queue-file-name'; name.textContent = file.name;
-                const size = document.createElement('span'); size.className = 'queue-file-size'; size.textContent = formatSize(file.size);
-                info.append(name, size);
-                const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'queue-remove'; remove.textContent = 'Remove'; remove.onclick = () => removeQueuedFile(index);
-                row.append(info, remove); list.appendChild(row);
+                const name = document.createElement('span'); name.className = 'queue-file-name'; name.textContent = entry.file.name;
+                const size = document.createElement('span'); size.className = 'queue-file-size'; size.textContent = formatSize(entry.file.size);
+                const status = document.createElement('span'); status.className = 'queue-status';
+                status.textContent = entry.status === 'uploading' ? `${entry.progress.toFixed(0)}%` : entry.status === 'error' ? 'Failed · retry' : entry.status === 'cancelling' ? 'Cancelling…' : entry.status === 'finishing' ? 'Finishing…' : '';
+                if (entry.status === 'error') status.classList.add('error');
+                info.append(name, size, status); main.appendChild(info);
+                if (entry.status === 'uploading') {
+                    const progress = document.createElement('div'); progress.className = 'queue-item-progress';
+                    const fill = document.createElement('span'); fill.style.width = `${entry.progress}%`; progress.appendChild(fill); main.appendChild(progress);
+                }
+                const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'queue-cancel';
+                cancel.setAttribute('aria-label', `Cancel ${entry.file.name}`); cancel.title = entry.status === 'uploading' ? 'Cancel upload' : 'Remove from upload list';
+                if (entry.status === 'finishing') cancel.disabled = true;
+                const icon = document.createElement('img'); icon.src = '/assets/icons/cancel-static.png'; icon.dataset.staticSrc = '/assets/icons/cancel-static.png'; icon.dataset.animatedSrc = '/assets/icons/cancel-48.gif'; icon.alt = '';
+                cancel.appendChild(icon); cancel.onmouseenter = () => { icon.src = icon.dataset.animatedSrc; }; cancel.onmouseleave = () => { icon.src = icon.dataset.staticSrc; };
+                cancel.onclick = () => cancelQueuedFile(entry.id);
+                row.append(main, cancel); list.appendChild(row);
             });
         }
 
-        function removeQueuedFile(index) { pendingFiles.splice(index, 1); renderQueue(); }
-        function clearQueue() { pendingFiles = []; fileInput.value = ''; renderQueue(); }
+        function removeQueuedFile(id) { pendingFiles = pendingFiles.filter(item => item.id !== id); renderQueue(); }
+        async function cancelQueuedFile(id) {
+            const entry = pendingFiles.find(item => item.id === id);
+            if (!entry) return;
+            if (entry.status !== 'uploading') { removeQueuedFile(id); return; }
+            entry.cancelRequested = true;
+            const xhr = entry.xhr;
+            // Remove the row immediately, then let the server mark the upload cancelled before aborting its body.
+            removeQueuedFile(id);
+            try {
+                const response = await fetch(`/uploads/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+                const result = response.ok ? await response.json() : { cancelled: true };
+                if (result.cancelled) {
+                    xhr?.abort();
+                }
+                // Reconcile the file table in both cases: the server may have committed just before the cancel.
+                await load(true);
+            } catch (_) {
+                // If cancellation cannot be confirmed, abort the body; the server's disconnect cleanup removes partial data.
+                xhr?.abort();
+                load(true);
+            }
+        }
+        function clearQueue() {
+            for (const entry of [...pendingFiles]) cancelQueuedFile(entry.id);
+            fileInput.value = '';
+        }
         // function openFile(id) { window.open('/files/' + id + '/open', '_blank'); }
         // function downloadFile(id) { window.location = '/files/' + id + '/download'; }
 
@@ -721,23 +773,16 @@
             load(true);
         }
 
-        function uploadWithProgress(form) {
+        function uploadWithProgress(entry) {
             return new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
-                const progressContainer = document.getElementById('progressContainer');
-                const progressBar = document.getElementById('progressBar');
-                const progressText = document.getElementById('progressText');
-
-                progressContainer.classList.add('active');
-                progressText.classList.add('active');
+                entry.xhr = xhr;
+                const form = new FormData(); form.append('files', entry.file);
 
                 xhr.upload.addEventListener('progress', (e) => {
                     if (e.lengthComputable) {
-                        const percent = (e.loaded / e.total * 100).toFixed(1);
-                        const loadedMB = (e.loaded / 1024 / 1024).toFixed(1);
-                        const totalMB = (e.total / 1024 / 1024).toFixed(1);
-                        progressBar.style.width = percent + '%';
-                        progressText.textContent = `${percent}% (${loadedMB} MB / ${totalMB} MB)`;
+                        entry.progress = e.loaded / e.total * 100;
+                        renderQueue();
                     }
                 });
 
@@ -745,58 +790,42 @@
                     if (xhr.status >= 200 && xhr.status < 300) {
                         resolve(xhr.response);
                     } else {
-                        reject(new Error('Upload failed: ' + xhr.status));
+                        reject(new Error(xhr.response?.error || `Upload failed: ${xhr.status}`));
                     }
                 });
 
                 xhr.addEventListener('error', () => reject(new Error('Network error')));
+                xhr.addEventListener('abort', () => reject(new DOMException('Upload cancelled', 'AbortError')));
 
                 xhr.open('POST', '/files/upload');
+                xhr.responseType = 'json';
+                xhr.setRequestHeader('X-Upload-Id', entry.id);
                 xhr.send(form);
             });
         }
 
         async function upload() {
-            if (pendingFiles.length === 0) return;
-            const form = new FormData();
-            for (const file of pendingFiles) {
-                form.append('files', file);
-            }
-
+            if (pendingFiles.length === 0 || uploadInProgress) return;
             const uploadBtn = document.querySelector('.queue-upload');
-            const progressContainer = document.getElementById('progressContainer');
-            const progressBar = document.getElementById('progressBar');
-            const progressText = document.getElementById('progressText');
-
+            uploadInProgress = true;
             uploadBtn.disabled = true;
             uploadBtn.textContent = 'Uploading...';
-
-            try {
-                await uploadWithProgress(form);
-
-                uploadBtn.textContent = 'Uploaded!';
-                uploadBtn.style.backgroundColor = '#4caf50';
-                uploadBtn.style.color = 'white';
-
-                setTimeout(() => {
-                    uploadBtn.textContent = 'Upload selected files';
-                    uploadBtn.style.backgroundColor = '';
-                    uploadBtn.style.color = '';
-                    uploadBtn.disabled = false;
-                    progressContainer.classList.remove('active');
-                    progressText.classList.remove('active');
-                    progressBar.style.width = '0%';
-                }, 2000);
-
-                clearQueue();
-                load(true);
-            } catch (error) {
-                uploadBtn.textContent = 'Upload selected files';
-                uploadBtn.disabled = false;
-                progressContainer.classList.remove('active');
-                progressText.classList.remove('active');
-                alert('Upload failed: ' + error.message);
+            for (const entry of [...pendingFiles]) {
+                if (!pendingFiles.includes(entry)) continue;
+                entry.status = 'uploading'; entry.progress = 0; renderQueue();
+                try {
+                    await uploadWithProgress(entry);
+                    removeQueuedFile(entry.id);
+                    load(true);
+                } catch (error) {
+                    if (error.name !== 'AbortError' && !entry.cancelRequested && pendingFiles.includes(entry)) {
+                        entry.status = 'error'; entry.xhr = null; renderQueue();
+                    }
+                }
             }
+            uploadInProgress = false;
+            uploadBtn.textContent = 'Upload selected files';
+            uploadBtn.disabled = false;
         }
 
         function formatDate(ts) {

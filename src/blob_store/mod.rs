@@ -224,6 +224,14 @@ impl Storage {
         Ok(())
     }
 
+    pub fn delete_tmp_file(&self, id: &str) -> io::Result<()> {
+        match fs::remove_file(self.tmp_file_path(id)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Deletes ALL .tmp files (called at server startup).
     pub fn cleanup_all_tmp_files(&self) -> io::Result<usize> {
         let mut removed = 0;

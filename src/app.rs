@@ -14,7 +14,18 @@ use std::{
 
 use std::error::Error;
 use std::fs;
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+
+struct UploadState {
+    owner_id: String,
+    cancelled: bool,
+    completed: bool,
+    completed_at: Option<Instant>,
+}
 
 pub struct App {
     pub config: Config,
@@ -22,6 +33,7 @@ pub struct App {
     pub metadata: MetadataStore,
     pub crypto: Crypto,
     pub sessions: SessionStore,
+    uploads: Mutex<HashMap<String, UploadState>>,
 }
 
 impl App {
@@ -122,7 +134,100 @@ impl App {
             metadata,
             crypto,
             sessions: SessionStore::new(),
+            uploads: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn register_upload(&self, id: &str, owner_id: &str) -> Result<bool, Box<dyn Error>> {
+        let mut uploads = self
+            .uploads
+            .lock()
+            .map_err(|_| "Upload state lock poisoned")?;
+        uploads.retain(|_, state| {
+            !state
+                .completed_at
+                .is_some_and(|at| at.elapsed().as_secs() > 900)
+        });
+        if uploads.contains_key(id) {
+            return Ok(false);
+        }
+        uploads.insert(
+            id.to_owned(),
+            UploadState {
+                owner_id: owner_id.to_owned(),
+                cancelled: false,
+                completed: false,
+                completed_at: None,
+            },
+        );
+        Ok(true)
+    }
+
+    pub fn cancel_upload(&self, id: &str, owner_id: &str) -> Result<Option<bool>, Box<dyn Error>> {
+        let mut uploads = self
+            .uploads
+            .lock()
+            .map_err(|_| "Upload state lock poisoned")?;
+        let Some(state) = uploads.get_mut(id) else {
+            uploads.insert(
+                id.to_owned(),
+                UploadState {
+                    owner_id: owner_id.to_owned(),
+                    cancelled: true,
+                    completed: false,
+                    completed_at: Some(Instant::now()),
+                },
+            );
+            return Ok(Some(true));
+        };
+        if state.owner_id != owner_id {
+            return Ok(None);
+        }
+        if state.completed {
+            return Ok(Some(false));
+        }
+        state.cancelled = true;
+        Ok(Some(true))
+    }
+
+    pub fn upload_cancelled(&self, id: &str, owner_id: &str) -> Result<bool, Box<dyn Error>> {
+        let uploads = self
+            .uploads
+            .lock()
+            .map_err(|_| "Upload state lock poisoned")?;
+        Ok(uploads
+            .get(id)
+            .is_none_or(|state| state.owner_id != owner_id || state.cancelled))
+    }
+
+    pub fn commit_upload(
+        &self,
+        id: &str,
+        owner_id: &str,
+        commit: impl FnOnce() -> Result<(), Box<dyn Error>>,
+    ) -> Result<bool, Box<dyn Error>> {
+        let mut uploads = self
+            .uploads
+            .lock()
+            .map_err(|_| "Upload state lock poisoned")?;
+        let Some(state) = uploads.get_mut(id) else {
+            return Ok(false);
+        };
+        if state.owner_id != owner_id || state.cancelled || state.completed {
+            return Ok(false);
+        }
+        commit()?;
+        state.completed = true;
+        state.completed_at = Some(Instant::now());
+        Ok(true)
+    }
+
+    pub fn remove_upload(&self, id: &str) {
+        if let Ok(mut uploads) = self.uploads.lock()
+            && uploads.get(id).is_some_and(|state| !state.completed)
+        {
+            uploads.remove(id);
+        }
     }
 
     pub fn print_banner(addr: &str, database_path: &Path) -> std::io::Result<()> {
