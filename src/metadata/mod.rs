@@ -278,6 +278,78 @@ impl MetadataStore {
         Ok(true)
     }
 
+    pub fn delete_folder_recursive(
+        &self,
+        owner_id: &str,
+        id: &str,
+    ) -> Result<Option<Vec<FileMetadata>>, Box<dyn std::error::Error>> {
+        let transaction = self.db.begin_write()?;
+        let folders = transaction.open_table(FOLDERS)?;
+        let Some(folder) = ({
+            let value = folders.get(id)?;
+            value.map(|value| serde_json::from_str::<FolderMetadata>(value.value()))
+        })
+        .transpose()?
+        else {
+            return Ok(None);
+        };
+        if folder.owner_id != owner_id {
+            return Err("Access denied".into());
+        }
+        if folder.parent_id.is_none() {
+            return Err("Root folder cannot be deleted".into());
+        }
+
+        let mut folder_ids = vec![id.to_owned()];
+        let mut index = 0;
+        while index < folder_ids.len() {
+            let parent = folder_ids[index].clone();
+            for entry in folders.iter()? {
+                let (_, value) = entry?;
+                let child: FolderMetadata = serde_json::from_str(value.value())?;
+                if child.owner_id == owner_id && child.parent_id.as_deref() == Some(parent.as_str())
+                {
+                    folder_ids.push(child.id);
+                }
+            }
+            index += 1;
+        }
+        drop(folders);
+
+        let mut files_to_delete = Vec::new();
+        {
+            let files = transaction.open_table(FILES)?;
+            for entry in files.iter()? {
+                let (key, value) = entry?;
+                let file: FileMetadata = serde_json::from_str(value.value())?;
+                if file.owner_id.as_deref() == Some(owner_id)
+                    && file
+                        .folder_id
+                        .as_deref()
+                        .is_some_and(|folder_id| folder_ids.iter().any(|id| id == folder_id))
+                {
+                    files_to_delete.push((key.value().to_owned(), file));
+                }
+            }
+        }
+        {
+            let mut files = transaction.open_table(FILES)?;
+            for (file_id, _) in &files_to_delete {
+                files.remove(file_id.as_str())?;
+            }
+        }
+        {
+            let mut folders = transaction.open_table(FOLDERS)?;
+            for folder_id in &folder_ids {
+                folders.remove(folder_id.as_str())?;
+            }
+        }
+        transaction.commit()?;
+        Ok(Some(
+            files_to_delete.into_iter().map(|(_, file)| file).collect(),
+        ))
+    }
+
     pub fn list_files_for_owner_folder(
         &self,
         owner_id: &str,

@@ -146,6 +146,12 @@
         .folder-modal-error { min-height: 1.2rem; margin: 0 0 .75rem; color: #c73d3d; font-size: .8rem; }
         .folder-modal-create { background: #43a563; color: #fff; border: 1px solid #348b50; }
         .folder-modal-create:hover { background: #378f54; }
+        .folder-delete-modal-box { width: min(28rem, calc(100vw - 2rem)); }
+        .folder-delete-warning { margin: 0 0 .75rem; color: #202124; line-height: 1.45; }
+        .folder-delete-checkbox { display: flex; align-items: center; gap: .5rem; margin: .75rem 0 1rem; color: #333; font-size: .9rem; }
+        .folder-delete-checkbox input { width: 1.05rem; height: 1.05rem; accent-color: #d93025; }
+        .folder-delete-danger { background: #d93025; color: #fff; border: 1px solid #d93025; }
+        .folder-delete-danger:hover { background: #b3261e; }
         .progress-container {
             display: none;
             width: 100%;
@@ -504,9 +510,39 @@
         async function deleteFolder(folder) {
             if (!confirm(`Delete folder "${folder.name}"? Only empty folders can be deleted.`)) return;
             const response = await fetch(`/folders/${encodeURIComponent(folder.id)}`, { method: 'DELETE' });
-            if (!response.ok) { alert('Could not delete folder. It may not be empty.'); return; }
+            if (!response.ok) {
+                const result = await response.json().catch(() => ({}));
+                if (response.status === 400 && result.error === 'Folder is not empty') { showFolderDeleteModal(folder); return; }
+                alert(result.error || 'Could not delete folder.');
+                return;
+            }
             selectedFolderIds.delete(folder.id);
             await loadFolders();
+        }
+
+        let pendingNonEmptyFolder = null;
+
+        function showFolderDeleteModal(folder) {
+            pendingNonEmptyFolder = folder;
+            document.getElementById('folderDeleteWarning').textContent = `The folder “${folder.name}” is not empty.`;
+            document.getElementById('deleteFolderContents').checked = false;
+            document.getElementById('folderDeleteModal').classList.add('active');
+        }
+
+        function closeFolderDeleteModal() {
+            pendingNonEmptyFolder = null;
+            document.getElementById('folderDeleteModal').classList.remove('active');
+        }
+
+        async function submitFolderDelete() {
+            if (!pendingNonEmptyFolder) return;
+            if (!document.getElementById('deleteFolderContents').checked) { closeFolderDeleteModal(); return; }
+            const folder = pendingNonEmptyFolder;
+            const response = await fetch(`/folders/${encodeURIComponent(folder.id)}?recursive=true`, { method: 'DELETE' });
+            if (!response.ok) { alert('Could not delete folder contents.'); return; }
+            selectedFolderIds.delete(folder.id);
+            closeFolderDeleteModal();
+            await Promise.all([load(true), loadFolders()]);
         }
 
         async function deleteSelectedFolders() {
@@ -970,6 +1006,12 @@
                 closeFolderCreateModal();
                 return;
             }
+            const folderDeleteModal = document.getElementById('folderDeleteModal');
+            if (event.key === 'Escape' && folderDeleteModal?.classList.contains('active')) {
+                event.preventDefault();
+                closeFolderDeleteModal();
+                return;
+            }
             if (!document.getElementById('imageModal').classList.contains('active')) return;
             if (event.key === 'Escape' || event.key === ' ') { event.preventDefault(); closeImageModal(); }
             if (event.key === 'ArrowLeft') { event.preventDefault(); navigateImage(-1); }
@@ -1042,7 +1084,9 @@
             if (!failedFiles) fileIds.forEach(id => selectedIds.delete(id));
             await Promise.all([load(true), loadFolders()]);
             if (failedFiles || failedFolders) {
-                alert(`Could not delete ${failedFiles ? 'some files' : ''}${failedFiles && failedFolders ? ' or ' : ''}${failedFolders ? `${failedFolders} folder(s)` : ''}.`);
+                const failedFolder = currentFolders.find(folder => folderIds.includes(folder.id));
+                if (failedFolders && failedFolder) showFolderDeleteModal(failedFolder);
+                else alert(`Could not delete ${failedFiles ? 'some files' : ''}${failedFiles && failedFolders ? ' or ' : ''}${failedFolders ? `${failedFolders} folder(s)` : ''}.`);
             }
         }
 
@@ -1197,6 +1241,18 @@
             <div class="modal-actions">
                 <button class="modal-btn-no" onclick="closeConfirmModal()">NO</button>
                 <button class="modal-btn-yes" onclick="confirmModalAction()">YES</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="folderDeleteModal" role="dialog" aria-modal="true" aria-labelledby="folderDeleteTitle" onclick="if(event.target === this) closeFolderDeleteModal()">
+        <div class="modal-box folder-delete-modal-box" onclick="event.stopPropagation()">
+            <h3 class="folder-modal-title" id="folderDeleteTitle">Folder is not empty</h3>
+            <p class="folder-delete-warning" id="folderDeleteWarning"></p>
+            <label class="folder-delete-checkbox"><input id="deleteFolderContents" type="checkbox"> Delete folder contents</label>
+            <div class="modal-actions">
+                <button class="modal-btn-no" type="button" onclick="closeFolderDeleteModal()">Cancel</button>
+                <button class="folder-delete-danger" type="button" onclick="submitFolderDelete()">Delete folder</button>
             </div>
         </div>
     </div>

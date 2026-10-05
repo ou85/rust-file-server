@@ -55,6 +55,11 @@ struct FolderQuery {
     parent_id: Option<String>,
 }
 
+#[derive(serde::Deserialize, Default)]
+struct DeleteFolderQuery {
+    recursive: Option<bool>,
+}
+
 #[derive(serde::Serialize)]
 struct FolderListResponse {
     current: FolderMetadata,
@@ -193,11 +198,15 @@ async fn delete_folder(
     jar: CookieJar,
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
+    query: Result<Query<DeleteFolderQuery>, QueryRejection>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let user = active_user(&jar, &app)?;
+    let Query(query) = query.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
     let deleted = app
-        .metadata
-        .delete_folder(&user.id, &id)
+        .delete_folder_for_user(&user, &id, query.recursive.unwrap_or(false))
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     if !deleted {
         return Err(ApiError::NotFound("Folder not found"));
@@ -1866,6 +1875,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/folders/{}?recursive=true", documents.id))
+                    .header("cookie", user_cookie(&app))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(app.metadata.get_folder(&documents.id).unwrap().is_none());
+        assert!(app.metadata.get_file("folder-file").unwrap().is_none());
         fs::remove_dir_all(dir).unwrap();
     }
 

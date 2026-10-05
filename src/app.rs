@@ -342,6 +342,28 @@ impl App {
         self.delete_file(id)
     }
 
+    pub fn delete_folder_for_user(
+        &self,
+        user: &UserAccount,
+        id: &str,
+        recursive: bool,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        if !recursive {
+            return Ok(self.metadata.delete_folder(&user.id, id)?);
+        }
+        let Some(files) = self.metadata.delete_folder_recursive(&user.id, id)? else {
+            return Ok(false);
+        };
+        for file in files {
+            if let Err(error) = self.storage.delete_file(&file.id) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    return Err(error.into());
+                }
+            }
+        }
+        Ok(true)
+    }
+
     pub fn demo(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let metadata = self.import_file(path)?;
 
