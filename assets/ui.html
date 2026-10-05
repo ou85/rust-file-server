@@ -208,7 +208,10 @@
         .queue-file-size { flex: none; color: #777; font-size: 12px; }
         .queue-remove { flex: none; height: 32px; padding: 0 10px; }
         .queue-cancel { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 2rem; height: 2rem; padding: 0; border: 1px solid transparent; border-radius: 50%; background: #fff; cursor: pointer; }
-        .queue-cancel:hover { background: #f2f2f2; box-shadow: 0 0 0 .125rem #eeeeec; }
+        .queue-cancel:hover { background: #fff; box-shadow: 0 0 0 .125rem #eeeeec; }
+        .queue-cancel:active { transform: scale(.9); }
+        .queue-cancel.cancel-feedback { animation: queue-cancel-press .2s ease-out; }
+        @keyframes queue-cancel-press { from { transform: scale(.85); } to { transform: scale(1); } }
         .queue-cancel:focus-visible { outline: 2px solid #75c995; outline-offset: 2px; }
         .queue-cancel:disabled { opacity: .55; cursor: default; }
         .queue-cancel img { width: 1.25rem; height: 1.25rem; object-fit: contain; }
@@ -586,18 +589,26 @@
                 const name = document.createElement('span'); name.className = 'queue-file-name'; name.textContent = entry.file.name;
                 const size = document.createElement('span'); size.className = 'queue-file-size'; size.textContent = formatSize(entry.file.size);
                 const status = document.createElement('span'); status.className = 'queue-status';
-                status.textContent = entry.status === 'uploading' ? `${entry.progress.toFixed(0)}%` : entry.status === 'error' ? 'Failed · retry' : entry.status === 'cancelling' ? 'Cancelling…' : entry.status === 'finishing' ? 'Finishing…' : '';
-                if (entry.status === 'error') status.classList.add('error');
+                status.textContent = entry.status === 'uploading' ? `${entry.progress.toFixed(0)}%` : entry.status === 'error' ? 'Failed · retry' : entry.status === 'cancelled' ? 'Отменено' : entry.status === 'completed' ? 'Uploaded · too late to cancel' : entry.status === 'cancel-error' ? 'Stopped · cancellation unconfirmed' : '';
+                entry.statusElement = status;
+                entry.progressElement = null;
+                if (entry.status === 'error' || entry.status === 'cancel-error') status.classList.add('error');
                 info.append(name, size, status); main.appendChild(info);
                 if (entry.status === 'uploading') {
                     const progress = document.createElement('div'); progress.className = 'queue-item-progress';
                     const fill = document.createElement('span'); fill.style.width = `${entry.progress}%`; progress.appendChild(fill); main.appendChild(progress);
+                    entry.progressElement = fill;
                 }
                 const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'queue-cancel';
                 cancel.setAttribute('aria-label', `Cancel ${entry.file.name}`); cancel.title = entry.status === 'uploading' ? 'Cancel upload' : 'Remove from upload list';
-                if (entry.status === 'finishing') cancel.disabled = true;
+                if (['cancelling', 'cancelled', 'completed'].includes(entry.status)) cancel.disabled = true;
                 const icon = document.createElement('img'); icon.src = '/assets/icons/cancel-static.png'; icon.dataset.staticSrc = '/assets/icons/cancel-static.png'; icon.dataset.animatedSrc = '/assets/icons/cancel-48.gif'; icon.alt = '';
-                cancel.appendChild(icon); cancel.onmouseenter = () => { icon.src = icon.dataset.animatedSrc; }; cancel.onmouseleave = () => { icon.src = icon.dataset.staticSrc; };
+                if (entry.cancelRequested || entry.iconAnimating) icon.src = icon.dataset.animatedSrc;
+                if (entry.status === 'cancelled') cancel.classList.add('cancel-feedback');
+                const animate = () => { entry.iconAnimating = true; icon.src = icon.dataset.animatedSrc; };
+                const stopAnimation = () => { entry.iconAnimating = false; icon.src = icon.dataset.staticSrc; };
+                cancel.appendChild(icon); cancel.onmouseenter = animate; cancel.onmouseleave = stopAnimation;
+                cancel.onfocus = animate; cancel.onblur = stopAnimation;
                 cancel.onclick = () => cancelQueuedFile(entry.id);
                 row.append(main, cancel); list.appendChild(row);
             });
@@ -607,24 +618,33 @@
         async function cancelQueuedFile(id) {
             const entry = pendingFiles.find(item => item.id === id);
             if (!entry) return;
+            if (['cancelling', 'cancelled', 'completed'].includes(entry.status)) return;
             if (entry.status !== 'uploading') { removeQueuedFile(id); return; }
             entry.cancelRequested = true;
+            entry.status = 'cancelled';
             const xhr = entry.xhr;
-            // Remove the row immediately, then let the server mark the upload cancelled before aborting its body.
-            removeQueuedFile(id);
+            // Stop all visual progress at the click; server cancellation runs in the background.
+            renderQueue();
             try {
                 const response = await fetch(`/uploads/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
-                const result = response.ok ? await response.json() : { cancelled: true };
+                if (!response.ok) throw new Error('Could not confirm cancellation');
+                const result = await response.json();
+                if (typeof result.cancelled !== 'boolean') throw new Error('Invalid cancellation response');
                 if (result.cancelled) {
+                    entry.status = 'cancelled';
                     xhr?.abort();
+                } else {
+                    entry.status = 'completed';
                 }
-                // Reconcile the file table in both cases: the server may have committed just before the cancel.
-                await load(true);
+                renderQueue();
+                window.setTimeout(() => removeQueuedFile(id), 1500);
             } catch (_) {
                 // If cancellation cannot be confirmed, abort the body; the server's disconnect cleanup removes partial data.
+                entry.status = 'cancel-error';
                 xhr?.abort();
-                load(true);
+                renderQueue();
             }
+            load(true).catch(() => {});
         }
         function clearQueue() {
             for (const entry of [...pendingFiles]) cancelQueuedFile(entry.id);
@@ -780,9 +800,11 @@
                 const form = new FormData(); form.append('files', entry.file);
 
                 xhr.upload.addEventListener('progress', (e) => {
-                    if (e.lengthComputable) {
+                    if (e.lengthComputable && entry.status === 'uploading' && !entry.cancelRequested) {
                         entry.progress = e.loaded / e.total * 100;
-                        renderQueue();
+                        // Keep the button in the DOM so progress events cannot restart its GIF or interrupt a click.
+                        if (entry.statusElement) entry.statusElement.textContent = `${entry.progress.toFixed(0)}%`;
+                        if (entry.progressElement) entry.progressElement.style.width = `${entry.progress}%`;
                     }
                 });
 
@@ -811,11 +833,11 @@
             uploadBtn.disabled = true;
             uploadBtn.textContent = 'Uploading...';
             for (const entry of [...pendingFiles]) {
-                if (!pendingFiles.includes(entry)) continue;
+                if (!pendingFiles.includes(entry) || !['queued', 'error'].includes(entry.status) || entry.cancelRequested) continue;
                 entry.status = 'uploading'; entry.progress = 0; renderQueue();
                 try {
                     await uploadWithProgress(entry);
-                    removeQueuedFile(entry.id);
+                    if (!entry.cancelRequested) removeQueuedFile(entry.id);
                     load(true);
                 } catch (error) {
                     if (error.name !== 'AbortError' && !entry.cancelRequested && pendingFiles.includes(entry)) {
