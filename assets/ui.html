@@ -589,7 +589,7 @@
                 const name = document.createElement('span'); name.className = 'queue-file-name'; name.textContent = entry.file.name;
                 const size = document.createElement('span'); size.className = 'queue-file-size'; size.textContent = formatSize(entry.file.size);
                 const status = document.createElement('span'); status.className = 'queue-status';
-                status.textContent = entry.status === 'uploading' ? `${entry.progress.toFixed(0)}%` : entry.status === 'error' ? 'Failed · retry' : entry.status === 'cancelled' ? 'Отменено' : entry.status === 'completed' ? 'Uploaded · too late to cancel' : entry.status === 'cancel-error' ? 'Stopped · cancellation unconfirmed' : '';
+                status.textContent = entry.status === 'uploading' ? `${entry.progress.toFixed(0)}%` : entry.status === 'error' ? 'Failed · retry' : entry.status === 'cancelled' ? 'Cancelled' : entry.status === 'completed' ? 'Uploaded · too late to cancel' : entry.status === 'cancel-error' ? 'Stopped · cancellation unconfirmed' : '';
                 entry.statusElement = status;
                 entry.progressElement = null;
                 if (entry.status === 'error' || entry.status === 'cancel-error') status.classList.add('error');
