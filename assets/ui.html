@@ -231,6 +231,7 @@
         .queue-clear { min-width: 48px; height: 32px; }
         .queue-clear:hover, .queue-remove:hover { border-color: #d85b5b; color: #c73d3d; background: #fff7f7; }
         .queue-list { display: flex; flex-direction: column; gap: 6px; max-height: 360px; overflow-y: auto; }
+        .queue-overflow { padding: .5rem; color: #777; font-size: .8rem; text-align: center; }
         .queue-item { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 8px; background: #f5f5f3; }
         .queue-item.uploading { align-items: flex-start; }
         .queue-item-main { min-width: 0; flex: 1; }
@@ -509,6 +510,7 @@
             }
             await collect(rootFolderId, 1);
             select.replaceChildren();
+            const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = 'Move selected to…'; placeholder.disabled = true; placeholder.selected = true; select.appendChild(placeholder);
             options.forEach(option => { const item = document.createElement('option'); item.value = option.id; item.textContent = `${'— '.repeat(option.depth)}${option.name}`; item.disabled = option.id === currentFolderId; select.appendChild(item); });
         }
 
@@ -734,11 +736,20 @@
             if (event.dataTransfer.files.length) addFiles(event.dataTransfer.files);
         });
 
-        function addFiles(files) {
-            for (const file of files) {
+        async function addFiles(files) {
+            const known = new Set(pendingFiles.map(item => `${item.relativePath}\u0000${item.file.size}\u0000${item.file.lastModified}`));
+            let processed = 0;
+            for (const file of Array.from(files)) {
                 const relativePath = file.webkitRelativePath || file.name;
-                const duplicate = pendingFiles.some(item => item.relativePath === relativePath && item.file.size === file.size && item.file.lastModified === file.lastModified);
-                if (!duplicate) pendingFiles.push({ id: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`), file, relativePath, status: 'queued', progress: 0, xhr: null, cancelRequested: false });
+                const key = `${relativePath}\u0000${file.size}\u0000${file.lastModified}`;
+                if (!known.has(key)) {
+                    known.add(key);
+                    pendingFiles.push({ id: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`), file, relativePath, status: 'queued', progress: 0, xhr: null, cancelRequested: false });
+                }
+                if (++processed % 250 === 0) {
+                    renderQueue();
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
             }
             renderQueue();
             fileInput.value = '';
@@ -750,7 +761,8 @@
             const list = document.getElementById('queueList');
             list.replaceChildren();
             queue.classList.toggle('visible', pendingFiles.length > 0);
-            pendingFiles.forEach(entry => {
+            const visibleEntries = pendingFiles.slice(0, 500);
+            visibleEntries.forEach(entry => {
                 const row = document.createElement('div'); row.className = 'queue-item';
                 if (entry.status === 'uploading') row.classList.add('uploading');
                 const main = document.createElement('div'); main.className = 'queue-item-main';
@@ -781,6 +793,9 @@
                 cancel.onclick = () => cancelQueuedFile(entry.id);
                 row.append(main, cancel); list.appendChild(row);
             });
+            if (pendingFiles.length > visibleEntries.length) {
+                const more = document.createElement('div'); more.className = 'queue-overflow'; more.textContent = `${pendingFiles.length - visibleEntries.length} more files queued`; list.appendChild(more);
+            }
         }
 
         function removeQueuedFile(id) { pendingFiles = pendingFiles.filter(item => item.id !== id); renderQueue(); }

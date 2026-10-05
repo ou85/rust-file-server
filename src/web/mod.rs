@@ -1915,6 +1915,32 @@ mod tests {
                 .as_deref(),
             Some(destination.id.as_str())
         );
+        let body = serde_json::json!({
+            "ids": ["move-a", "move-b"],
+            "folder_id": root.id
+        });
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/files/move")
+                    .header("cookie", user_cookie(&app))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            app.metadata
+                .get_file("move-a")
+                .unwrap()
+                .unwrap()
+                .folder_id
+                .as_deref(),
+            Some(root.id.as_str())
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
