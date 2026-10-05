@@ -154,6 +154,140 @@ impl MetadataStore {
             .any(|folder| folder.name == name))
     }
 
+    pub fn create_folder(
+        &self,
+        owner_id: &str,
+        parent_id: Option<&str>,
+        name: &str,
+    ) -> Result<FolderMetadata, Box<dyn std::error::Error>> {
+        let transaction = self.db.begin_write()?;
+        let mut folders = transaction.open_table(FOLDERS)?;
+        let parent_id = parent_id
+            .map(str::to_owned)
+            .unwrap_or_else(|| root_folder_id(owner_id));
+        {
+            let parent = folders
+                .get(parent_id.as_str())?
+                .ok_or("Parent folder not found")?;
+            let parent: FolderMetadata = serde_json::from_str(parent.value())?;
+            if parent.owner_id != owner_id {
+                return Err("Access denied".into());
+            }
+        }
+        for entry in folders.iter()? {
+            let (_, value) = entry?;
+            let folder: FolderMetadata = serde_json::from_str(value.value())?;
+            if folder.owner_id == owner_id
+                && folder.parent_id.as_deref() == Some(parent_id.as_str())
+                && folder.name == name
+            {
+                return Err("Folder already exists".into());
+            }
+        }
+        let folder = FolderMetadata {
+            id: uuid::Uuid::new_v4().to_string(),
+            owner_id: owner_id.to_owned(),
+            parent_id: Some(parent_id),
+            name: name.to_owned(),
+            created_at: now_secs(),
+        };
+        let json = serde_json::to_string(&folder)?;
+        folders.insert(folder.id.as_str(), json.as_str())?;
+        drop(folders);
+        transaction.commit()?;
+        Ok(folder)
+    }
+
+    pub fn rename_folder(
+        &self,
+        owner_id: &str,
+        id: &str,
+        name: &str,
+    ) -> Result<Option<FolderMetadata>, Box<dyn std::error::Error>> {
+        let transaction = self.db.begin_write()?;
+        let mut folders = transaction.open_table(FOLDERS)?;
+        let Some(mut folder) = ({
+            let value = folders.get(id)?;
+            value.map(|value| serde_json::from_str::<FolderMetadata>(value.value()))
+        })
+        .transpose()?
+        else {
+            return Ok(None);
+        };
+        if folder.owner_id != owner_id {
+            return Err("Access denied".into());
+        }
+        if folder.parent_id.is_none() {
+            return Err("Root folder cannot be renamed".into());
+        }
+        for entry in folders.iter()? {
+            let (key, value) = entry?;
+            if key.value() == id {
+                continue;
+            }
+            let other: FolderMetadata = serde_json::from_str(value.value())?;
+            if other.owner_id == owner_id
+                && other.parent_id == folder.parent_id
+                && other.name == name
+            {
+                return Err("Folder already exists".into());
+            }
+        }
+        folder.name = name.to_owned();
+        let json = serde_json::to_string(&folder)?;
+        folders.insert(id, json.as_str())?;
+        drop(folders);
+        transaction.commit()?;
+        Ok(Some(folder))
+    }
+
+    pub fn delete_folder(
+        &self,
+        owner_id: &str,
+        id: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let transaction = self.db.begin_write()?;
+        let mut folders = transaction.open_table(FOLDERS)?;
+        let Some(folder) = ({
+            let value = folders.get(id)?;
+            value.map(|value| serde_json::from_str::<FolderMetadata>(value.value()))
+        })
+        .transpose()?
+        else {
+            return Ok(false);
+        };
+        if folder.owner_id != owner_id {
+            return Err("Access denied".into());
+        }
+        if folder.parent_id.is_none() {
+            return Err("Root folder cannot be deleted".into());
+        }
+        if folders.iter()?.any(|entry| {
+            entry
+                .ok()
+                .and_then(|(_, value)| serde_json::from_str::<FolderMetadata>(value.value()).ok())
+                .is_some_and(|child| child.parent_id.as_deref() == Some(id))
+        }) {
+            return Err("Folder is not empty".into());
+        }
+        folders.remove(id)?;
+        drop(folders);
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub fn list_files_for_owner_folder(
+        &self,
+        owner_id: &str,
+        folder_id: &str,
+    ) -> Result<Vec<FileMetadata>, Box<dyn std::error::Error>> {
+        Ok(self
+            .list_files_for_owner(owner_id)?
+            .into_iter()
+            .filter(|file| file.folder_id.as_deref() == Some(folder_id))
+            .collect())
+    }
+
     pub fn get_user(&self, id: &str) -> Result<Option<UserAccount>, Box<dyn std::error::Error>> {
         let transaction = self.db.begin_read()?;
         let table = transaction.open_table(USERS)?;

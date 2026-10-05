@@ -2,8 +2,9 @@ use crate::{
     app::App,
     blob_store,
     domain::{
-        BulkDeleteRequest, ChangePasswordRequest, CreateUserRequest, FileMetadata, LoginRequest,
-        RenameUserRequest, UserAccount, UserInfo, UserRole,
+        BulkDeleteRequest, ChangePasswordRequest, CreateFolderRequest, CreateUserRequest,
+        FileMetadata, FolderMetadata, LoginRequest, RenameFolderRequest, RenameUserRequest,
+        UserAccount, UserInfo, UserRole,
     },
 };
 use axum::{
@@ -46,6 +47,18 @@ struct FileListQuery {
     per_page: Option<usize>,
     search: Option<String>,
     sort: Option<String>,
+    folder_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FolderQuery {
+    parent_id: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct FolderListResponse {
+    current: FolderMetadata,
+    folders: Vec<FolderMetadata>,
 }
 
 #[derive(serde::Deserialize)]
@@ -74,6 +87,8 @@ pub fn create_router(state: Arc<App>) -> Router {
         .route("/health", get(health))
         .route("/storage", get(storage_stats))
         .route("/me", get(current_user))
+        .route("/folders", get(list_folders).post(create_folder))
+        .route("/folders/{id}", put(rename_folder).delete(delete_folder))
         .route("/admin/users", get(list_users).post(create_user))
         .route("/admin/users/{id}/name", put(rename_user))
         .route(
@@ -106,6 +121,86 @@ async fn current_user(
 ) -> ApiResult<Json<serde_json::Value>> {
     let account = session_user(&jar, &app)?;
     Ok(Json(json!({ "username": account.username })))
+}
+
+async fn list_folders(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    query: Result<Query<FolderQuery>, QueryRejection>,
+) -> ApiResult<Json<FolderListResponse>> {
+    let user = active_user(&jar, &app)?;
+    let Query(query) = query.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
+    let current = match query.parent_id.as_deref() {
+        Some(id) => app
+            .user_folder(&user, id)
+            .map_err(|error| ApiError::internal("Read folder", error))?
+            .ok_or(ApiError::NotFound("Folder not found"))?,
+        None => app
+            .user_root_folder(&user)
+            .map_err(|error| ApiError::internal("Open root folder", error))?,
+    };
+    let folders = app
+        .metadata
+        .list_child_folders(&user.id, Some(&current.id))
+        .map_err(|error| ApiError::internal("List folders", error))?;
+    Ok(Json(FolderListResponse { current, folders }))
+}
+
+async fn create_folder(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    request: Result<Json<CreateFolderRequest>, JsonRejection>,
+) -> ApiResult<(StatusCode, Json<FolderMetadata>)> {
+    let user = active_user(&jar, &app)?;
+    let Json(request) = request.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
+    let name = validate_folder_name(&request.name)?;
+    let folder = app
+        .metadata
+        .create_folder(&user.id, request.parent_id.as_deref(), &name)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    Ok((StatusCode::CREATED, Json(folder)))
+}
+
+async fn rename_folder(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    request: Result<Json<RenameFolderRequest>, JsonRejection>,
+) -> ApiResult<Json<FolderMetadata>> {
+    let user = active_user(&jar, &app)?;
+    let Json(request) = request.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
+    let name = validate_folder_name(&request.name)?;
+    let folder = app
+        .metadata
+        .rename_folder(&user.id, &id, &name)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?
+        .ok_or(ApiError::NotFound("Folder not found"))?;
+    Ok(Json(folder))
+}
+
+async fn delete_folder(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let user = active_user(&jar, &app)?;
+    let deleted = app
+        .metadata
+        .delete_folder(&user.id, &id)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    if !deleted {
+        return Err(ApiError::NotFound("Folder not found"));
+    }
+    Ok(Json(json!({"deleted": true, "id": id})))
 }
 
 async fn list_users(jar: CookieJar, State(app): State<Arc<App>>) -> ApiResult<Json<Vec<UserInfo>>> {
@@ -416,7 +511,16 @@ async fn list_files(
         message: error.body_text(),
     })?;
 
-    match app.list_files_for_user(&user) {
+    let folder = match query.folder_id.as_deref() {
+        Some(id) => app
+            .user_folder(&user, id)
+            .map_err(|error| ApiError::internal("Read folder", error))?
+            .ok_or(ApiError::NotFound("Folder not found"))?,
+        None => app
+            .user_root_folder(&user)
+            .map_err(|error| ApiError::internal("Open root folder", error))?,
+    };
+    match app.list_files_for_user_in_folder(&user, &folder.id) {
         Ok(mut files) => {
             let search = query.search.unwrap_or_default().to_lowercase();
             files.retain(|file| file.filename.to_lowercase().contains(&search));
@@ -735,6 +839,11 @@ async fn upload_files(
                 .map_err(|error| ApiError::internal("Read current time", error))?
                 .as_secs(),
             owner_id: Some(user.id.clone()),
+            folder_id: Some(
+                app.user_root_folder(&user)
+                    .map_err(|error| ApiError::internal("Open root folder", error))?
+                    .id,
+            ),
         };
 
         // Hold the upload state lock through publication so cancellation cannot race commit.
@@ -778,6 +887,20 @@ fn validate_relative_upload_path(path: &str) -> Result<String, ApiError> {
         return Err(ApiError::BadRequest("Invalid relative upload path".into()));
     }
     Ok(path.to_owned())
+}
+
+fn validate_folder_name(name: &str) -> Result<String, ApiError> {
+    if name.is_empty()
+        || name.len() > 255
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.chars().any(char::is_control)
+    {
+        return Err(ApiError::BadRequest("Invalid folder name".into()));
+    }
+    Ok(name.to_owned())
 }
 
 async fn cancel_upload(
@@ -1196,6 +1319,7 @@ mod tests {
                 size: 10,
                 created_at: 0,
                 owner_id: Some("test-user".into()),
+                folder_id: Some("root-test-user".into()),
             })
             .unwrap();
         app.metadata.insert_invalid_record("corrupt");
@@ -1424,6 +1548,7 @@ mod tests {
                     size: index,
                     created_at: index,
                     owner_id: Some("test-user".into()),
+                    folder_id: Some("root-test-user".into()),
                 })
                 .unwrap();
         }
@@ -1459,6 +1584,7 @@ mod tests {
                 size: 123,
                 created_at: 1,
                 owner_id: Some("test-user".into()),
+                folder_id: Some("root-test-user".into()),
             })
             .unwrap();
         let response = create_router(app.clone())

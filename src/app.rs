@@ -3,7 +3,7 @@ use crate::{
     blob_store::{ChunkIterator, RangeChunkIterator, Storage},
     config::Config,
     crypto::Crypto,
-    domain::{FileMetadata, UserAccount, UserRole},
+    domain::{FileMetadata, FolderMetadata, UserAccount, UserRole},
     metadata::MetadataStore,
 };
 
@@ -104,6 +104,24 @@ impl App {
 
     pub fn user_crypto(&self, user: &UserAccount) -> Result<Crypto, Box<dyn std::error::Error>> {
         Ok(self.crypto.for_wrapped_user_key(&user.encrypted_data_key)?)
+    }
+
+    pub fn user_root_folder(
+        &self,
+        user: &UserAccount,
+    ) -> Result<FolderMetadata, Box<dyn std::error::Error>> {
+        Ok(self.metadata.ensure_root_folder(&user.id)?)
+    }
+
+    pub fn user_folder(
+        &self,
+        user: &UserAccount,
+        id: &str,
+    ) -> Result<Option<FolderMetadata>, Box<dyn std::error::Error>> {
+        Ok(self
+            .metadata
+            .get_folder(id)?
+            .filter(|folder| folder.owner_id == user.id))
     }
 
     pub fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
@@ -260,6 +278,7 @@ impl App {
             size: file.content.len() as u64,
             created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
             owner_id: None,
+            folder_id: None,
         };
 
         self.storage.save_file(&file, &self.crypto)?;
@@ -292,6 +311,18 @@ impl App {
         user: &UserAccount,
     ) -> Result<Vec<FileMetadata>, Box<dyn std::error::Error>> {
         let mut files = self.metadata.list_files_for_owner(&user.id)?;
+        files.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(files)
+    }
+
+    pub fn list_files_for_user_in_folder(
+        &self,
+        user: &UserAccount,
+        folder_id: &str,
+    ) -> Result<Vec<FileMetadata>, Box<dyn std::error::Error>> {
+        let mut files = self
+            .metadata
+            .list_files_for_owner_folder(&user.id, folder_id)?;
         files.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         Ok(files)
     }

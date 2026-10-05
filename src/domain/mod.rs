@@ -16,6 +16,8 @@ pub struct FileMetadata {
     pub created_at: u64,
     #[serde(default)]
     pub owner_id: Option<String>,
+    #[serde(default)]
+    pub folder_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -53,6 +55,17 @@ pub struct RenameUserRequest {
 pub struct ChangePasswordRequest {
     pub password: String,
     pub confirmation: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreateFolderRequest {
+    pub parent_id: Option<String>,
+    pub name: String,
+}
+
+#[derive(Deserialize)]
+pub struct RenameFolderRequest {
+    pub name: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
