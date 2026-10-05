@@ -290,6 +290,91 @@ impl MetadataStore {
             .collect())
     }
 
+    pub fn file_name_exists(
+        &self,
+        owner_id: &str,
+        folder_id: &str,
+        filename: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        Ok(self
+            .list_files_for_owner_folder(owner_id, folder_id)?
+            .into_iter()
+            .any(|file| file.filename == filename))
+    }
+
+    pub fn move_files_for_owner(
+        &self,
+        owner_id: &str,
+        ids: &[String],
+        folder_id: &str,
+    ) -> Result<Vec<FileMetadata>, Box<dyn std::error::Error>> {
+        let transaction = self.db.begin_write()?;
+        {
+            let folders = transaction.open_table(FOLDERS)?;
+            let Some(value) = folders.get(folder_id)? else {
+                return Err("Destination folder not found".into());
+            };
+            let folder: FolderMetadata = serde_json::from_str(value.value())?;
+            if folder.owner_id != owner_id {
+                return Err("Access denied".into());
+            }
+        }
+
+        let mut candidates = Vec::with_capacity(ids.len());
+        {
+            let files = transaction.open_table(FILES)?;
+            for id in ids {
+                let file: FileMetadata = {
+                    let Some(value) = files.get(id.as_str())? else {
+                        return Err("File not found".into());
+                    };
+                    serde_json::from_str(value.value())?
+                };
+                if file.owner_id.as_deref() != Some(owner_id) {
+                    return Err("Access denied".into());
+                }
+                candidates.push(file);
+            }
+            if candidates.iter().enumerate().any(|(index, file)| {
+                candidates
+                    .iter()
+                    .skip(index + 1)
+                    .any(|other| other.filename == file.filename)
+            }) {
+                return Err(
+                    "A file with this name already exists in the destination folder".into(),
+                );
+            }
+            for entry in files.iter()? {
+                let (key, value) = entry?;
+                let other: FileMetadata = serde_json::from_str(value.value())?;
+                if other.owner_id.as_deref() == Some(owner_id)
+                    && other.folder_id.as_deref() == Some(folder_id)
+                    && candidates.iter().any(|file| {
+                        file.filename == other.filename
+                            && !ids.iter().any(|id| id.as_str() == key.value())
+                    })
+                {
+                    return Err(
+                        "A file with this name already exists in the destination folder".into(),
+                    );
+                }
+            }
+        }
+        let mut moved = Vec::with_capacity(candidates.len());
+        {
+            let mut files = transaction.open_table(FILES)?;
+            for mut file in candidates {
+                file.folder_id = Some(folder_id.to_owned());
+                let json = serde_json::to_string(&file)?;
+                files.insert(file.id.as_str(), json.as_str())?;
+                moved.push(file);
+            }
+        }
+        transaction.commit()?;
+        Ok(moved)
+    }
+
     pub fn get_user(&self, id: &str) -> Result<Option<UserAccount>, Box<dyn std::error::Error>> {
         let transaction = self.db.begin_read()?;
         let table = transaction.open_table(USERS)?;

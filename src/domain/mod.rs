@@ -68,6 +68,12 @@ pub struct RenameFolderRequest {
     pub name: String,
 }
 
+#[derive(Deserialize)]
+pub struct MoveFilesRequest {
+    pub ids: Vec<String>,
+    pub folder_id: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserRole {

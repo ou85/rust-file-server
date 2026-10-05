@@ -71,6 +71,7 @@ pub async fn browser_error_pages(request: Request, next: Next) -> Response {
 #[derive(Debug)]
 pub enum ApiError {
     BadRequest(String),
+    Conflict(&'static str),
     Unauthorized,
     RequestRejected {
         status: StatusCode,
@@ -98,6 +99,7 @@ impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BadRequest(message) => f.write_str(message),
+            Self::Conflict(message) => f.write_str(message),
             Self::Unauthorized => f.write_str("Invalid credentials"),
             Self::RequestRejected { message, .. } => f.write_str(message),
             Self::Forbidden => f.write_str("Access denied"),
@@ -114,6 +116,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::RequestRejected { status, .. } => *status,
             Self::Forbidden => StatusCode::FORBIDDEN,

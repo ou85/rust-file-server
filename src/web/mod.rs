@@ -3,8 +3,8 @@ use crate::{
     blob_store,
     domain::{
         BulkDeleteRequest, ChangePasswordRequest, CreateFolderRequest, CreateUserRequest,
-        FileMetadata, FolderMetadata, LoginRequest, RenameFolderRequest, RenameUserRequest,
-        UserAccount, UserInfo, UserRole,
+        FileMetadata, FolderMetadata, LoginRequest, MoveFilesRequest, RenameFolderRequest,
+        RenameUserRequest, UserAccount, UserInfo, UserRole,
     },
 };
 use axum::{
@@ -98,6 +98,7 @@ pub fn create_router(state: Arc<App>) -> Router {
         )
         .route("/assets/icons/{name}", get(icon))
         .route("/files", get(list_files).delete(delete_files))
+        .route("/files/move", post(move_files))
         .route("/files/{id}", get(get_file))
         .route("/files/upload", post(upload_files))
         .route("/uploads/{id}/cancel", post(cancel_upload))
@@ -607,6 +608,28 @@ async fn delete_files(
     Ok(Json(json!({ "deleted": deleted })))
 }
 
+async fn move_files(
+    jar: CookieJar,
+    State(app): State<Arc<App>>,
+    request: Result<Json<MoveFilesRequest>, JsonRejection>,
+) -> ApiResult<Json<Vec<FileMetadata>>> {
+    let user = active_user(&jar, &app)?;
+    let Json(request) = request.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
+    if request.ids.is_empty() || request.ids.len() > 1_000 {
+        return Err(ApiError::BadRequest(
+            "Provide between 1 and 1000 file IDs".into(),
+        ));
+    }
+    let files = app
+        .metadata
+        .move_files_for_owner(&user.id, &request.ids, &request.folder_id)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    Ok(Json(files))
+}
+
 fn lookup_file(app: &App, user: &UserAccount, id: &str) -> ApiResult<FileMetadata> {
     app.get_file_for_user(user, id)
         .map_err(|error| ApiError::internal("Read file metadata", error))?
@@ -773,6 +796,13 @@ async fn upload_files(
             .unwrap_or_else(|| field.file_name().unwrap_or("unknown").to_string());
         let (filename, folder_id) =
             resolve_upload_destination(&app, &user, &start_folder.id, Some(&relative_path))?;
+        if app
+            .metadata
+            .file_name_exists(&user.id, &folder_id, &filename)
+            .map_err(|error| ApiError::internal("Check upload destination", error))?
+        {
+            return Err(ApiError::Conflict("A file with this name already exists"));
+        }
         let id = crate::domain::id::id_16();
         // Keep track immediately so cancellation or a disconnected client removes partial data.
         // SAFETY: this guard owns the upload lifecycle until the metadata transaction commits.
@@ -1680,7 +1710,7 @@ mod tests {
                         "content-type",
                         format!("multipart/form-data; boundary={boundary}"),
                     )
-                    .body(Body::from(body))
+                    .body(Body::from(body.clone()))
                     .unwrap(),
             )
             .await
@@ -1702,6 +1732,23 @@ mod tests {
             uploaded[0].folder_id.as_deref(),
             Some(folders[0].id.as_str())
         );
+
+        let duplicate = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/files/upload?relative_path=project%2Fhello.txt")
+                    .header("cookie", user_cookie(&app))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
         let id = uploaded[0].id.clone();
 
         let response = create_router(app.clone())
@@ -1717,6 +1764,157 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert!(app.list_files().unwrap().is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn folder_lifecycle_is_scoped_and_non_empty_folders_are_protected() {
+        let (app, dir) = test_app();
+        let create_request = |name: &str, parent_id: Option<&str>| {
+            let body = serde_json::json!({ "name": name, "parent_id": parent_id });
+            Request::builder()
+                .method("POST")
+                .uri("/folders")
+                .header("cookie", user_cookie(&app))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let response = create_router(app.clone())
+            .oneshot(create_request("Documents", None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let documents: FolderMetadata =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let response = create_router(app.clone())
+            .oneshot(create_request("Nested", Some(&documents.id)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let nested: FolderMetadata =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/folders/{}", documents.id))
+                    .header("cookie", user_cookie(&app))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/folders/{}", nested.id))
+                    .header("cookie", user_cookie(&app))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let other = UserAccount {
+            id: "other-user".into(),
+            username: "other".into(),
+            password_hash: hash_password("test-password").unwrap(),
+            auth_version: 1,
+            role: UserRole::User,
+            password_change_required: false,
+            encrypted_data_key: app.crypto.create_wrapped_user_key().unwrap(),
+        };
+        app.metadata.create_user(&other).unwrap();
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/folders?parent_id={}", documents.id))
+                    .header("cookie", account_cookie(&app, "other"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let file = FileMetadata {
+            id: "folder-file".into(),
+            filename: "inside.txt".into(),
+            size: 10,
+            created_at: 1,
+            owner_id: Some("test-user".into()),
+            folder_id: Some(documents.id.clone()),
+        };
+        app.metadata.save_file(&file).unwrap();
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/folders/{}", documents.id))
+                    .header("cookie", user_cookie(&app))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn selected_files_can_be_moved_to_another_folder() {
+        let (app, dir) = test_app();
+        let root = app.metadata.root_folder("test-user").unwrap().unwrap();
+        let destination = app
+            .metadata
+            .create_folder("test-user", Some(&root.id), "Archive")
+            .unwrap();
+        for id in ["move-a", "move-b"] {
+            app.metadata
+                .save_file(&FileMetadata {
+                    id: id.into(),
+                    filename: format!("{id}.txt"),
+                    size: 1,
+                    created_at: 1,
+                    owner_id: Some("test-user".into()),
+                    folder_id: Some(root.id.clone()),
+                })
+                .unwrap();
+        }
+        let body = serde_json::json!({
+            "ids": ["move-a", "move-b"],
+            "folder_id": destination.id
+        });
+        let response = create_router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/files/move")
+                    .header("cookie", user_cookie(&app))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            app.metadata
+                .get_file("move-a")
+                .unwrap()
+                .unwrap()
+                .folder_id
+                .as_deref(),
+            Some(destination.id.as_str())
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

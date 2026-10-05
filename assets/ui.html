@@ -199,9 +199,21 @@
         .folder-breadcrumbs button, .folder-new { border: 0; background: transparent; color: #333; cursor: pointer; font: inherit; }
         .folder-breadcrumbs button:hover, .folder-new:hover { text-decoration: underline; }
         .folder-new { flex: none; padding: .25rem .5rem; border: 1px solid #d0d0d0; border-radius: .4rem; background: #fff; }
-        .folder-list { display: flex; flex-wrap: wrap; gap: .4rem; padding: .65rem .75rem; }
-        .folder-entry { display: inline-flex; align-items: center; gap: .35rem; padding: .45rem .6rem; border: 1px solid #d8d8d5; border-radius: .45rem; background: #fff; cursor: pointer; }
+        .folder-header-actions { display: flex; align-items: center; gap: .4rem; }
+        .folder-list { display: flex; flex-direction: column; gap: .4rem; padding: .65rem .75rem; }
+        .folder-entry { display: flex; align-items: center; gap: .5rem; min-height: 2.5rem; padding: .35rem .5rem; border: 1px solid #d8d8d5; border-radius: .45rem; background: #fff; }
         .folder-entry:hover { background: #f0f0ee; }
+        .folder-entry-main { display: flex; align-items: center; gap: .45rem; min-width: 0; flex: 1; border: 0; background: transparent; color: #222; text-align: left; cursor: pointer; font: inherit; }
+        .folder-entry-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+        .folder-entry-date { flex: none; color: #777; font-size: .8rem; }
+        .folder-entry-action { flex: none; padding: .25rem .45rem; border: 1px solid #d0d0d0; border-radius: .35rem; background: #fff; color: #333; cursor: pointer; font-size: .8rem; }
+        .folder-entry-action:hover { background: #f0f0f0; }
+        .folder-entry-action.delete:hover { border-color: #d85b5b; color: #c73d3d; background: #fff7f7; }
+        .folder-select, .file-checkbox { accent-color: #43a563; }
+        .folder-delete-selected { display: none; }
+        .folder-delete-selected.visible { display: inline-block; }
+        .selection-move { display: inline-flex; align-items: center; gap: .35rem; }
+        .selection-move select { max-width: 12rem; border: 0; background: transparent; color: inherit; font: inherit; }
         .folder-empty { padding: .7rem .75rem; color: #777; font-size: .85rem; }
         .upload-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
         .upload-button { width: auto; height: 38px; padding: 0 17px; border: 1px solid #2da35a; border-radius: 8px; background: #36c76b; color: #fff; }
@@ -328,7 +340,7 @@
     <section class="files-card">
         <h2>Files</h2>
         <section class="folder-browser" aria-label="Folders">
-            <div class="folder-browser-header"><div class="folder-breadcrumbs" id="folderBreadcrumbs"></div><button type="button" class="folder-new" onclick="createFolder()">New folder</button></div>
+            <div class="folder-browser-header"><div class="folder-breadcrumbs" id="folderBreadcrumbs"></div><div class="folder-header-actions"><button type="button" class="folder-delete-selected" id="folderDeleteSelected" onclick="deleteSelectedFolders()">Delete selected</button><button type="button" class="folder-new" onclick="createFolder()">New folder</button></div></div>
             <div class="folder-list" id="folderList"></div>
         </section>
         <div class="upload-card">
@@ -368,6 +380,7 @@
         <button type="button" class="selection-count" onclick="clearSelection()" aria-label="Clear selected files"><span id="selectionCount"></span><span class="selection-dismiss" aria-hidden="true"><img class="selection-animated-icon" src="/assets/icons/cancel-static.png" data-static-src="/assets/icons/cancel-static.png" data-animated-src="/assets/icons/cancel-48.gif" alt=""></span></button>
         <button type="button" class="selection-action selection-download" onclick="downloadSelected()" aria-label="Download selected files"><img class="selection-animated-icon" src="/assets/icons/download-48-static.png" data-static-src="/assets/icons/download-48-static.png" data-animated-src="/assets/icons/download-48.gif" alt=""></button>
         <button type="button" class="selection-action selection-delete" onclick="deleteSelected()" aria-label="Delete selected files"><img class="selection-animated-icon" src="/assets/icons/trash-static.png" data-static-src="/assets/icons/trash-static.png" data-animated-src="/assets/icons/trash-48.gif" alt=""></button>
+        <div class="selection-action selection-move" aria-label="Move selected files"><span>Move</span><select id="moveFolderSelect" aria-label="Destination folder" onchange="moveSelected()"></select></div>
     </div>
     <table id="files" class="files-table"></table>
     <nav class="pagination" id="pagination" aria-label="File pages"></nav>
@@ -398,6 +411,8 @@
         let fileRequestId = 0;
         let currentFolderId = null;
         let folderTrail = [];
+        let rootFolderId = null;
+        const selectedFolderIds = new Set();
 
         async function load(refreshStorage = false) {
             const requestId = ++fileRequestId;
@@ -425,7 +440,9 @@
             const response = await fetch(`/folders${params}`);
             if (!response.ok) throw new Error('Could not load folders');
             const result = await response.json();
+            if (!result.current.parent_id) rootFolderId = result.current.id;
             renderFolders(result);
+            await refreshMoveTargets();
         }
 
         function renderFolders(result) {
@@ -437,10 +454,78 @@
                 const button = document.createElement('button'); button.type = 'button'; button.textContent = folder.name; button.onclick = () => openFolder(folder.id, index + 1); breadcrumbs.appendChild(button);
             });
             const list = document.getElementById('folderList'); list.replaceChildren();
-            if (!result.folders.length) { const empty = document.createElement('span'); empty.className = 'folder-empty'; empty.textContent = 'No folders'; list.appendChild(empty); return; }
+            if (!result.folders.length) { const empty = document.createElement('span'); empty.className = 'folder-empty'; empty.textContent = 'No folders'; list.appendChild(empty); updateFolderSelectionToolbar(); return; }
             result.folders.forEach(folder => {
-                const button = document.createElement('button'); button.type = 'button'; button.className = 'folder-entry'; button.textContent = `📁 ${folder.name}`; button.onclick = () => openFolder(folder.id, folder); list.appendChild(button);
+                const entry = document.createElement('div'); entry.className = 'folder-entry';
+                const select = document.createElement('input'); select.type = 'checkbox'; select.className = 'folder-select'; select.checked = selectedFolderIds.has(folder.id); select.setAttribute('aria-label', `Select folder ${folder.name}`);
+                select.addEventListener('change', () => { select.checked ? selectedFolderIds.add(folder.id) : selectedFolderIds.delete(folder.id); updateFolderSelectionToolbar(); });
+                const button = document.createElement('button'); button.type = 'button'; button.className = 'folder-entry-main'; button.onclick = () => openFolder(folder.id, folder);
+                const name = document.createElement('span'); name.className = 'folder-entry-name'; name.textContent = `📁 ${folder.name}`;
+                const date = document.createElement('span'); date.className = 'folder-entry-date'; date.textContent = formatDate(folder.created_at);
+                button.append(name, date);
+                const rename = document.createElement('button'); rename.type = 'button'; rename.className = 'folder-entry-action'; rename.textContent = 'Rename'; rename.onclick = () => renameFolder(folder);
+                const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'folder-entry-action delete'; remove.textContent = 'Delete'; remove.onclick = () => deleteFolder(folder);
+                entry.append(select, button, rename, remove); list.appendChild(entry);
             });
+            updateFolderSelectionToolbar();
+        }
+
+        function updateFolderSelectionToolbar() {
+            document.getElementById('folderDeleteSelected').classList.toggle('visible', selectedFolderIds.size > 0);
+        }
+
+        async function renameFolder(folder) {
+            const name = prompt('New folder name:', folder.name);
+            if (!name || name === folder.name) return;
+            const response = await fetch(`/folders/${encodeURIComponent(folder.id)}`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name }) });
+            if (!response.ok) { alert('Could not rename folder.'); return; }
+            const trailFolder = folderTrail.find(item => item.id === folder.id);
+            if (trailFolder) trailFolder.name = name;
+            await loadFolders();
+        }
+
+        async function deleteFolder(folder) {
+            if (!confirm(`Delete folder "${folder.name}"? Only empty folders can be deleted.`)) return;
+            const response = await fetch(`/folders/${encodeURIComponent(folder.id)}`, { method: 'DELETE' });
+            if (!response.ok) { alert('Could not delete folder. It may not be empty.'); return; }
+            selectedFolderIds.delete(folder.id);
+            await loadFolders();
+        }
+
+        async function deleteSelectedFolders() {
+            if (!selectedFolderIds.size || !confirm('Delete selected folders? Only empty folders can be deleted.')) return;
+            let failed = 0;
+            for (const id of [...selectedFolderIds]) {
+                const response = await fetch(`/folders/${encodeURIComponent(id)}`, { method: 'DELETE' });
+                if (response.ok) selectedFolderIds.delete(id); else failed++;
+            }
+            await loadFolders();
+            if (failed) alert(`${failed} folder(s) could not be deleted because they are not empty.`);
+        }
+
+        async function refreshMoveTargets() {
+            const select = document.getElementById('moveFolderSelect');
+            if (!select || !rootFolderId) return;
+            const options = [{ id: rootFolderId, name: 'Home', depth: 0 }];
+            async function collect(parentId, depth) {
+                const response = await fetch(`/folders?parent_id=${encodeURIComponent(parentId)}`);
+                if (!response.ok) return;
+                const result = await response.json();
+                for (const folder of result.folders) { options.push({ id: folder.id, name: folder.name, depth }); await collect(folder.id, depth + 1); }
+            }
+            await collect(rootFolderId, 1);
+            select.replaceChildren();
+            options.forEach(option => { const item = document.createElement('option'); item.value = option.id; item.textContent = `${'— '.repeat(option.depth)}${option.name}`; item.disabled = option.id === currentFolderId; select.appendChild(item); });
+        }
+
+        async function moveSelected() {
+            if (!selectedIds.size) return;
+            const folderId = document.getElementById('moveFolderSelect').value;
+            if (!folderId || folderId === currentFolderId) return;
+            const response = await fetch('/files/move', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ ids: [...selectedIds], folder_id: folderId }) });
+            if (!response.ok) { alert('Could not move selected files.'); return; }
+            selectedIds.clear();
+            await load(true);
         }
 
         async function openFolder(folderId, folderOrIndex) {
