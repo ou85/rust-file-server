@@ -290,8 +290,8 @@
         .selection-download:hover { color: #222; border-color: #65db91; background: #fff; box-shadow: 0 0 0 .125rem rgba(101,219,145,.55); }
         .selection-animated-icon { display: block; width: 1.25rem; height: 1.25rem; object-fit: contain; }
         .file-checkbox, .folder-select { width: 1.25rem; height: 1.25rem; margin: 0; accent-color: #65db91; cursor: pointer; vertical-align: middle; transition: opacity .12s ease; }
-        .files-table tbody tr:not(:hover) input[type="checkbox"]:not(:checked) { opacity: 0; pointer-events: none; }
-        .files-table tbody tr input[type="checkbox"]:focus-visible { opacity: 1; pointer-events: auto; }
+        .files-table input[type="checkbox"] { opacity: 0; pointer-events: none; }
+        .files-table tr:hover input[type="checkbox"], .files-table input[type="checkbox"]:checked, .files-table input[type="checkbox"]:focus-visible { opacity: 1; pointer-events: auto; }
         tr.selected-row td { background: #efefed; }
         th:first-child, td:first-child { width: 36px; padding-right: 2px; }
         td.file-name { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
@@ -618,6 +618,7 @@
                 row.appendChild(actions); table.appendChild(row);
             });
             renderSelectionToolbar();
+            updateFolderSelectionToolbar();
         }
 
         function toggleFolderMenu(container, folder) {
