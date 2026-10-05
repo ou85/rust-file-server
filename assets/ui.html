@@ -213,8 +213,9 @@
         .folder-menu button.delete:hover { color: #c73d3d; background: #fff7f7 !important; }
         .files-table td .folder-entry-main { width: 100%; height: auto; min-height: 2.125rem; padding: .375rem .5rem; border: 0; background: transparent; }
         .folder-select, .file-checkbox { accent-color: #43a563; }
-        .folder-delete-selected { display: none; }
-        .folder-delete-selected.visible { display: inline-block; }
+        .folder-selection-toolbar { display: none; align-items: center; gap: .5rem; }
+        .folder-selection-toolbar.visible { display: flex; }
+        .folder-selection-toolbar .selection-count { margin-right: 0; }
         .selection-move { display: inline-flex; align-items: center; gap: .35rem; }
         .selection-move select { max-width: 12rem; border: 0; background: transparent; color: inherit; font: inherit; }
         .folder-row { background: #fafafa; }
@@ -288,7 +289,9 @@
         .selection-download { color: #222; border-color: #d0d0d0; }
         .selection-download:hover { color: #222; border-color: #65db91; background: #fff; box-shadow: 0 0 0 .125rem rgba(101,219,145,.55); }
         .selection-animated-icon { display: block; width: 1.25rem; height: 1.25rem; object-fit: contain; }
-        .file-checkbox { width: 20px; height: 20px; margin: 0; accent-color: #65db91; cursor: pointer; vertical-align: middle; }
+        .file-checkbox, .folder-select { width: 1.25rem; height: 1.25rem; margin: 0; accent-color: #65db91; cursor: pointer; vertical-align: middle; transition: opacity .12s ease; }
+        .files-table tbody tr:not(:hover) input[type="checkbox"]:not(:checked) { opacity: 0; pointer-events: none; }
+        .files-table tbody tr input[type="checkbox"]:focus-visible { opacity: 1; pointer-events: auto; }
         tr.selected-row td { background: #efefed; }
         th:first-child, td:first-child { width: 36px; padding-right: 2px; }
         td.file-name { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
@@ -386,7 +389,7 @@
         <div class="selection-action selection-move" aria-label="Move selected files"><span>Move</span><select id="moveFolderSelect" aria-label="Destination folder" onchange="moveSelected()"></select></div>
     </div>
     <section class="folder-browser" aria-label="Folders">
-        <div class="folder-browser-header"><div class="folder-breadcrumbs" id="folderBreadcrumbs"></div><div class="folder-header-actions"><button type="button" class="folder-delete-selected" id="folderDeleteSelected" onclick="deleteSelectedFolders()">Delete selected</button><button type="button" class="folder-new" onclick="createFolder()">New folder</button></div></div>
+        <div class="folder-browser-header"><div class="folder-breadcrumbs" id="folderBreadcrumbs"></div><div class="folder-header-actions"><div class="folder-selection-toolbar" id="folderSelectionToolbar"><button type="button" class="selection-count" onclick="clearFolderSelection()" aria-label="Clear selected folders"><span id="folderSelectionCount"></span><span class="selection-dismiss" aria-hidden="true"><img class="selection-animated-icon" src="/assets/icons/cancel-static.png" data-static-src="/assets/icons/cancel-static.png" data-animated-src="/assets/icons/cancel-48.gif" alt=""></span></button><button type="button" class="selection-action selection-delete" onclick="deleteSelectedFolders()" aria-label="Delete selected folders"><img class="selection-animated-icon" src="/assets/icons/trash-static.png" data-static-src="/assets/icons/trash-static.png" data-animated-src="/assets/icons/trash-48.gif" alt=""></button></div><button type="button" class="folder-new" onclick="createFolder()">New folder</button></div></div>
     </section>
     <table id="files" class="files-table"></table>
     <nav class="pagination" id="pagination" aria-label="File pages"></nav>
@@ -466,7 +469,14 @@
         }
 
         function updateFolderSelectionToolbar() {
-            document.getElementById('folderDeleteSelected').classList.toggle('visible', selectedFolderIds.size > 0);
+            const toolbar = document.getElementById('folderSelectionToolbar');
+            toolbar.classList.toggle('visible', selectedFolderIds.size > 0);
+            document.getElementById('folderSelectionCount').textContent = `${selectedFolderIds.size} ${selectedFolderIds.size === 1 ? 'folder' : 'folders'}`;
+        }
+
+        function clearFolderSelection() {
+            selectedFolderIds.clear();
+            renderFiles();
         }
 
         async function renameFolder(folder) {
@@ -575,10 +585,10 @@
             });
             table.appendChild(headerRow);
             currentFolders.forEach(folder => {
-                const row = document.createElement('tr'); row.className = 'folder-row';
+                const row = document.createElement('tr'); row.className = 'folder-row'; row.classList.toggle('selected-row', selectedFolderIds.has(folder.id));
                 const selectCell = document.createElement('td');
                 const select = document.createElement('input'); select.type = 'checkbox'; select.className = 'folder-select'; select.checked = selectedFolderIds.has(folder.id); select.setAttribute('aria-label', `Select folder ${folder.name}`);
-                select.addEventListener('change', () => { select.checked ? selectedFolderIds.add(folder.id) : selectedFolderIds.delete(folder.id); updateFolderSelectionToolbar(); });
+                select.addEventListener('change', () => { select.checked ? selectedFolderIds.add(folder.id) : selectedFolderIds.delete(folder.id); renderFiles(); });
                 selectCell.appendChild(select); row.appendChild(selectCell);
                 const nameCell = document.createElement('td'); nameCell.className = 'file-name';
                 const open = document.createElement('button'); open.type = 'button'; open.className = 'folder-entry-main'; open.onclick = () => openFolder(folder.id, folder);
@@ -704,7 +714,7 @@
         document.getElementById('filePageSize').addEventListener('change', event => {
             pageSize = Number(event.target.value); currentPage = 1; load();
         });
-        document.querySelectorAll('#selectionToolbar .selection-count, #selectionToolbar .selection-download, #selectionToolbar .selection-delete').forEach(button => {
+        document.querySelectorAll('#selectionToolbar .selection-count, #selectionToolbar .selection-download, #selectionToolbar .selection-delete, #folderSelectionToolbar .selection-count, #folderSelectionToolbar .selection-delete').forEach(button => {
             const icon = button.querySelector('.selection-animated-icon');
             const showAnimation = () => { icon.src = icon.dataset.animatedSrc; };
             const showStatic = () => { icon.src = icon.dataset.staticSrc; };
