@@ -1,12 +1,13 @@
 use crate::{
     config::Config,
-    domain::{FileMetadata, UserAccount},
+    domain::{FileMetadata, FolderMetadata, UserAccount},
 };
 use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
 const FILES: TableDefinition<&str, &str> = TableDefinition::new("files");
 const USERS: TableDefinition<&str, &str> = TableDefinition::new("users");
 const USERNAMES: TableDefinition<&str, &str> = TableDefinition::new("usernames");
+const FOLDERS: TableDefinition<&str, &str> = TableDefinition::new("folders");
 
 pub struct MetadataStore {
     db: Database,
@@ -30,6 +31,7 @@ impl MetadataStore {
             let _ = transaction.open_table(FILES)?;
             let _ = transaction.open_table(USERS)?;
             let _ = transaction.open_table(USERNAMES)?;
+            let _ = transaction.open_table(FOLDERS)?;
         }
         transaction.commit()?;
         tracing::info!("Database initialized");
@@ -56,8 +58,100 @@ impl MetadataStore {
             let mut users = transaction.open_table(USERS)?;
             users.insert(user.id.as_str(), json.as_str())?;
         }
+        let root = FolderMetadata {
+            id: root_folder_id(&user.id),
+            owner_id: user.id.clone(),
+            parent_id: None,
+            name: String::new(),
+            created_at: now_secs(),
+        };
+        let root_json = serde_json::to_string(&root)?;
+        {
+            let mut folders = transaction.open_table(FOLDERS)?;
+            folders.insert(root.id.as_str(), root_json.as_str())?;
+        }
         transaction.commit()?;
         Ok(())
+    }
+
+    pub fn root_folder(
+        &self,
+        owner_id: &str,
+    ) -> Result<Option<FolderMetadata>, Box<dyn std::error::Error>> {
+        self.get_folder(&root_folder_id(owner_id))
+    }
+
+    pub fn ensure_root_folder(
+        &self,
+        owner_id: &str,
+    ) -> Result<FolderMetadata, Box<dyn std::error::Error>> {
+        if let Some(folder) = self.root_folder(owner_id)? {
+            return Ok(folder);
+        }
+        let root = FolderMetadata {
+            id: root_folder_id(owner_id),
+            owner_id: owner_id.to_owned(),
+            parent_id: None,
+            name: String::new(),
+            created_at: now_secs(),
+        };
+        self.save_folder(&root)?;
+        Ok(root)
+    }
+
+    pub fn save_folder(&self, folder: &FolderMetadata) -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_string(folder)?;
+        let transaction = self.db.begin_write()?;
+        {
+            let mut table = transaction.open_table(FOLDERS)?;
+            table.insert(folder.id.as_str(), json.as_str())?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn get_folder(
+        &self,
+        id: &str,
+    ) -> Result<Option<FolderMetadata>, Box<dyn std::error::Error>> {
+        let transaction = self.db.begin_read()?;
+        let table = transaction.open_table(FOLDERS)?;
+        table
+            .get(id)?
+            .map(|value| serde_json::from_str(value.value()))
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub fn list_child_folders(
+        &self,
+        owner_id: &str,
+        parent_id: Option<&str>,
+    ) -> Result<Vec<FolderMetadata>, Box<dyn std::error::Error>> {
+        let transaction = self.db.begin_read()?;
+        let table = transaction.open_table(FOLDERS)?;
+        let mut folders = Vec::new();
+        for entry in table.iter()? {
+            let (_, value) = entry?;
+            let folder: FolderMetadata = serde_json::from_str(value.value())?;
+            if folder.owner_id == owner_id && folder.parent_id.as_deref() == parent_id {
+                folders.push(folder);
+            }
+        }
+        folders.sort_by_cached_key(|folder| folder.name.to_lowercase());
+        Ok(folders)
+    }
+
+    pub fn folder_name_exists(
+        &self,
+        owner_id: &str,
+        parent_id: Option<&str>,
+        name: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        Ok(self
+            .list_child_folders(owner_id, parent_id)?
+            .into_iter()
+            .any(|folder| folder.name == name))
     }
 
     pub fn get_user(&self, id: &str) -> Result<Option<UserAccount>, Box<dyn std::error::Error>> {
@@ -253,4 +347,14 @@ impl MetadataStore {
         transaction.commit()?;
         Ok(())
     }
+}
+
+pub fn root_folder_id(owner_id: &str) -> String {
+    format!("root-{owner_id}")
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }

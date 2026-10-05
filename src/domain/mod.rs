@@ -18,6 +18,15 @@ pub struct FileMetadata {
     pub owner_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FolderMetadata {
+    pub id: String,
+    pub owner_id: String,
+    pub parent_id: Option<String>,
+    pub name: String,
+    pub created_at: u64,
+}
+
 #[derive(Deserialize)]
 pub struct LoginRequest {
     pub username: String,
