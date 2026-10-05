@@ -193,19 +193,15 @@
         .folder-picker { display: flex; justify-content: center; margin-top: .75rem; }
         .folder-button { display: inline-flex; align-items: center; justify-content: center; min-height: 2.25rem; padding: 0 .9rem; border: 1px solid #d0d0d0; border-radius: .5rem; background: #fff; color: #222; cursor: pointer; font-size: .875rem; }
         .folder-button:hover { background: #f0f0f0; }
-        .folder-browser { margin: 1rem 0 0; border: 1px solid #e5e5e2; border-radius: .6rem; background: #fafafa; }
-        .folder-browser-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .6rem .75rem; border-bottom: 1px solid #e5e5e2; }
+        .folder-browser { margin: 1.5rem 0 0; border-top: 1px solid #e5e5e2; border-bottom: 1px solid #e5e5e2; background: #fafafa; }
+        .folder-browser-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; min-height: 2.75rem; padding: .45rem .25rem; }
         .folder-breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; min-width: 0; font-size: .85rem; }
         .folder-breadcrumbs button, .folder-new { border: 0; background: transparent; color: #333; cursor: pointer; font: inherit; }
         .folder-breadcrumbs button:hover, .folder-new:hover { text-decoration: underline; }
         .folder-new { flex: none; padding: .25rem .5rem; border: 1px solid #d0d0d0; border-radius: .4rem; background: #fff; }
         .folder-header-actions { display: flex; align-items: center; gap: .4rem; }
-        .folder-list { display: flex; flex-direction: column; gap: .4rem; padding: .65rem .75rem; }
-        .folder-entry { display: flex; align-items: center; gap: .5rem; min-height: 2.5rem; padding: .35rem .5rem; border: 1px solid #d8d8d5; border-radius: .45rem; background: #fff; }
-        .folder-entry:hover { background: #f0f0ee; }
-        .folder-entry-main { display: flex; align-items: center; gap: .45rem; min-width: 0; flex: 1; border: 0; background: transparent; color: #222; text-align: left; cursor: pointer; font: inherit; }
+        .folder-entry-main { display: flex; align-items: center; gap: .45rem; width: 100%; border: 0; background: transparent; color: #222; text-align: left; cursor: pointer; font: inherit; }
         .folder-entry-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-        .folder-entry-date { flex: none; color: #777; font-size: .8rem; }
         .folder-entry-action { flex: none; padding: .25rem .45rem; border: 1px solid #d0d0d0; border-radius: .35rem; background: #fff; color: #333; cursor: pointer; font-size: .8rem; }
         .folder-entry-action:hover { background: #f0f0f0; }
         .folder-entry-action.delete:hover { border-color: #d85b5b; color: #c73d3d; background: #fff7f7; }
@@ -214,7 +210,10 @@
         .folder-delete-selected.visible { display: inline-block; }
         .selection-move { display: inline-flex; align-items: center; gap: .35rem; }
         .selection-move select { max-width: 12rem; border: 0; background: transparent; color: inherit; font: inherit; }
-        .folder-empty { padding: .7rem .75rem; color: #777; font-size: .85rem; }
+        .folder-row { background: #fafafa; }
+        .folder-row:hover { background: #f0f0ee; }
+        .folder-row .file-name { font-weight: 600; }
+        .folder-row .file-size { color: #999; }
         .upload-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
         .upload-button { width: auto; height: 38px; padding: 0 17px; border: 1px solid #2da35a; border-radius: 8px; background: #36c76b; color: #fff; }
         .upload-button:hover { background: #2eaf5d; border-color: #258d4b; }
@@ -339,10 +338,6 @@
     </section>
     <section class="files-card">
         <h2>Files</h2>
-        <section class="folder-browser" aria-label="Folders">
-            <div class="folder-browser-header"><div class="folder-breadcrumbs" id="folderBreadcrumbs"></div><div class="folder-header-actions"><button type="button" class="folder-delete-selected" id="folderDeleteSelected" onclick="deleteSelectedFolders()">Delete selected</button><button type="button" class="folder-new" onclick="createFolder()">New folder</button></div></div>
-            <div class="folder-list" id="folderList"></div>
-        </section>
         <div class="upload-card">
             <label class="drop-zone" for="file" id="dropZone">
                 <span class="drop-title">Drop files here</span>
@@ -382,6 +377,9 @@
         <button type="button" class="selection-action selection-delete" onclick="deleteSelected()" aria-label="Delete selected files"><img class="selection-animated-icon" src="/assets/icons/trash-static.png" data-static-src="/assets/icons/trash-static.png" data-animated-src="/assets/icons/trash-48.gif" alt=""></button>
         <div class="selection-action selection-move" aria-label="Move selected files"><span>Move</span><select id="moveFolderSelect" aria-label="Destination folder" onchange="moveSelected()"></select></div>
     </div>
+    <section class="folder-browser" aria-label="Folders">
+        <div class="folder-browser-header"><div class="folder-breadcrumbs" id="folderBreadcrumbs"></div><div class="folder-header-actions"><button type="button" class="folder-delete-selected" id="folderDeleteSelected" onclick="deleteSelectedFolders()">Delete selected</button><button type="button" class="folder-new" onclick="createFolder()">New folder</button></div></div>
+    </section>
     <table id="files" class="files-table"></table>
     <nav class="pagination" id="pagination" aria-label="File pages"></nav>
     </section>
@@ -412,6 +410,7 @@
         let currentFolderId = null;
         let folderTrail = [];
         let rootFolderId = null;
+        let currentFolders = [];
         const selectedFolderIds = new Set();
 
         async function load(refreshStorage = false) {
@@ -441,8 +440,10 @@
             if (!response.ok) throw new Error('Could not load folders');
             const result = await response.json();
             if (!result.current.parent_id) rootFolderId = result.current.id;
+            currentFolders = result.folders;
             renderFolders(result);
             await refreshMoveTargets();
+            renderFiles();
         }
 
         function renderFolders(result) {
@@ -452,20 +453,6 @@
             folderTrail.forEach((folder, index) => {
                 const separator = document.createElement('span'); separator.textContent = '/'; breadcrumbs.appendChild(separator);
                 const button = document.createElement('button'); button.type = 'button'; button.textContent = folder.name; button.onclick = () => openFolder(folder.id, index + 1); breadcrumbs.appendChild(button);
-            });
-            const list = document.getElementById('folderList'); list.replaceChildren();
-            if (!result.folders.length) { const empty = document.createElement('span'); empty.className = 'folder-empty'; empty.textContent = 'No folders'; list.appendChild(empty); updateFolderSelectionToolbar(); return; }
-            result.folders.forEach(folder => {
-                const entry = document.createElement('div'); entry.className = 'folder-entry';
-                const select = document.createElement('input'); select.type = 'checkbox'; select.className = 'folder-select'; select.checked = selectedFolderIds.has(folder.id); select.setAttribute('aria-label', `Select folder ${folder.name}`);
-                select.addEventListener('change', () => { select.checked ? selectedFolderIds.add(folder.id) : selectedFolderIds.delete(folder.id); updateFolderSelectionToolbar(); });
-                const button = document.createElement('button'); button.type = 'button'; button.className = 'folder-entry-main'; button.onclick = () => openFolder(folder.id, folder);
-                const name = document.createElement('span'); name.className = 'folder-entry-name'; name.textContent = `📁 ${folder.name}`;
-                const date = document.createElement('span'); date.className = 'folder-entry-date'; date.textContent = formatDate(folder.created_at);
-                button.append(name, date);
-                const rename = document.createElement('button'); rename.type = 'button'; rename.className = 'folder-entry-action'; rename.textContent = 'Rename'; rename.onclick = () => renameFolder(folder);
-                const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'folder-entry-action delete'; remove.textContent = 'Delete'; remove.onclick = () => deleteFolder(folder);
-                entry.append(select, button, rename, remove); list.appendChild(entry);
             });
             updateFolderSelectionToolbar();
         }
@@ -578,6 +565,22 @@
                 const th = document.createElement('th'); th.textContent = text; headerRow.appendChild(th);
             });
             table.appendChild(headerRow);
+            currentFolders.forEach(folder => {
+                const row = document.createElement('tr'); row.className = 'folder-row';
+                const selectCell = document.createElement('td');
+                const select = document.createElement('input'); select.type = 'checkbox'; select.className = 'folder-select'; select.checked = selectedFolderIds.has(folder.id); select.setAttribute('aria-label', `Select folder ${folder.name}`);
+                select.addEventListener('change', () => { select.checked ? selectedFolderIds.add(folder.id) : selectedFolderIds.delete(folder.id); updateFolderSelectionToolbar(); });
+                selectCell.appendChild(select); row.appendChild(selectCell);
+                const nameCell = document.createElement('td'); nameCell.className = 'file-name';
+                const open = document.createElement('button'); open.type = 'button'; open.className = 'folder-entry-main'; open.onclick = () => openFolder(folder.id, folder);
+                const name = document.createElement('span'); name.className = 'folder-entry-name'; name.textContent = `📁 ${folder.name}`; open.appendChild(name); nameCell.appendChild(open); row.appendChild(nameCell);
+                const date = document.createElement('td'); date.className = 'file-date'; date.textContent = formatDate(folder.created_at); row.appendChild(date);
+                const size = document.createElement('td'); size.className = 'file-size'; size.textContent = '—'; row.appendChild(size);
+                const actions = document.createElement('td'); actions.className = 'file-actions';
+                const rename = document.createElement('button'); rename.type = 'button'; rename.className = 'folder-entry-action'; rename.textContent = 'Rename'; rename.onclick = () => renameFolder(folder);
+                const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'folder-entry-action delete'; remove.textContent = 'Delete'; remove.onclick = () => deleteFolder(folder);
+                actions.append(rename, remove); row.appendChild(actions); table.appendChild(row);
+            });
             files.forEach(f => {
                 const row = document.createElement('tr');
                 row.classList.toggle('selected-row', selectedIds.has(f.id));
