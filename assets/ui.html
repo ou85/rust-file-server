@@ -193,6 +193,16 @@
         .folder-picker { display: flex; justify-content: center; margin-top: .75rem; }
         .folder-button { display: inline-flex; align-items: center; justify-content: center; min-height: 2.25rem; padding: 0 .9rem; border: 1px solid #d0d0d0; border-radius: .5rem; background: #fff; color: #222; cursor: pointer; font-size: .875rem; }
         .folder-button:hover { background: #f0f0f0; }
+        .folder-browser { margin: 1rem 0 0; border: 1px solid #e5e5e2; border-radius: .6rem; background: #fafafa; }
+        .folder-browser-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .6rem .75rem; border-bottom: 1px solid #e5e5e2; }
+        .folder-breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; min-width: 0; font-size: .85rem; }
+        .folder-breadcrumbs button, .folder-new { border: 0; background: transparent; color: #333; cursor: pointer; font: inherit; }
+        .folder-breadcrumbs button:hover, .folder-new:hover { text-decoration: underline; }
+        .folder-new { flex: none; padding: .25rem .5rem; border: 1px solid #d0d0d0; border-radius: .4rem; background: #fff; }
+        .folder-list { display: flex; flex-wrap: wrap; gap: .4rem; padding: .65rem .75rem; }
+        .folder-entry { display: inline-flex; align-items: center; gap: .35rem; padding: .45rem .6rem; border: 1px solid #d8d8d5; border-radius: .45rem; background: #fff; cursor: pointer; }
+        .folder-entry:hover { background: #f0f0ee; }
+        .folder-empty { padding: .7rem .75rem; color: #777; font-size: .85rem; }
         .upload-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
         .upload-button { width: auto; height: 38px; padding: 0 17px; border: 1px solid #2da35a; border-radius: 8px; background: #36c76b; color: #fff; }
         .upload-button:hover { background: #2eaf5d; border-color: #258d4b; }
@@ -317,6 +327,10 @@
     </section>
     <section class="files-card">
         <h2>Files</h2>
+        <section class="folder-browser" aria-label="Folders">
+            <div class="folder-browser-header"><div class="folder-breadcrumbs" id="folderBreadcrumbs"></div><button type="button" class="folder-new" onclick="createFolder()">New folder</button></div>
+            <div class="folder-list" id="folderList"></div>
+        </section>
         <div class="upload-card">
             <label class="drop-zone" for="file" id="dropZone">
                 <span class="drop-title">Drop files here</span>
@@ -382,12 +396,15 @@
         let pageSize = 20;
         let totalPages = 1;
         let fileRequestId = 0;
+        let currentFolderId = null;
+        let folderTrail = [];
 
         async function load(refreshStorage = false) {
             const requestId = ++fileRequestId;
             const search = document.getElementById('fileSearch').value.trim();
             const sort = document.getElementById('fileSort').value;
             const params = new URLSearchParams({ page: currentPage, per_page: pageSize, search, sort });
+            if (currentFolderId) params.set('folder_id', currentFolderId);
             const filesPromise = fetch(`/files?${params}`);
             const [filesRes] = refreshStorage
                 ? await Promise.all([filesPromise, loadStorage()])
@@ -401,6 +418,46 @@
             totalPages = Math.max(1, Math.ceil(result.total / pageSize));
             renderFiles();
             renderPagination();
+        }
+
+        async function loadFolders(parentId = currentFolderId) {
+            const params = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : '';
+            const response = await fetch(`/folders${params}`);
+            if (!response.ok) throw new Error('Could not load folders');
+            const result = await response.json();
+            renderFolders(result);
+        }
+
+        function renderFolders(result) {
+            const breadcrumbs = document.getElementById('folderBreadcrumbs');
+            breadcrumbs.replaceChildren();
+            const root = document.createElement('button'); root.type = 'button'; root.textContent = 'Home'; root.onclick = () => openFolder(null); breadcrumbs.appendChild(root);
+            folderTrail.forEach((folder, index) => {
+                const separator = document.createElement('span'); separator.textContent = '/'; breadcrumbs.appendChild(separator);
+                const button = document.createElement('button'); button.type = 'button'; button.textContent = folder.name; button.onclick = () => openFolder(folder.id, index + 1); breadcrumbs.appendChild(button);
+            });
+            const list = document.getElementById('folderList'); list.replaceChildren();
+            if (!result.folders.length) { const empty = document.createElement('span'); empty.className = 'folder-empty'; empty.textContent = 'No folders'; list.appendChild(empty); return; }
+            result.folders.forEach(folder => {
+                const button = document.createElement('button'); button.type = 'button'; button.className = 'folder-entry'; button.textContent = `📁 ${folder.name}`; button.onclick = () => openFolder(folder.id, folder); list.appendChild(button);
+            });
+        }
+
+        async function openFolder(folderId, folderOrIndex) {
+            currentFolderId = folderId;
+            if (!folderId) folderTrail = [];
+            else if (typeof folderOrIndex === 'number') folderTrail = folderTrail.slice(0, folderOrIndex);
+            else folderTrail.push(folderOrIndex);
+            currentPage = 1;
+            await Promise.all([loadFolders(), load()]);
+        }
+
+        async function createFolder() {
+            const name = prompt('Folder name:');
+            if (!name) return;
+            const response = await fetch('/folders', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ parent_id: currentFolderId, name }) });
+            if (!response.ok) { alert('Could not create folder.'); return; }
+            await loadFolders();
         }
 
         async function loadStorage() {
@@ -827,7 +884,8 @@
                 xhr.addEventListener('error', () => reject(new Error('Network error')));
                 xhr.addEventListener('abort', () => reject(new DOMException('Upload cancelled', 'AbortError')));
 
-                xhr.open('POST', `/files/upload?relative_path=${encodeURIComponent(entry.relativePath)}`);
+                const uploadPath = `/files/upload?relative_path=${encodeURIComponent(entry.relativePath)}${currentFolderId ? `&folder_id=${encodeURIComponent(currentFolderId)}` : ''}`;
+                xhr.open('POST', uploadPath);
                 xhr.responseType = 'json';
                 xhr.setRequestHeader('X-Upload-Id', entry.id);
                 xhr.send(form);
@@ -846,7 +904,7 @@
                 try {
                     await uploadWithProgress(entry);
                     if (!entry.cancelRequested) removeQueuedFile(entry.id);
-                    load(true);
+                    await Promise.all([loadFolders(), load(true)]);
                 } catch (error) {
                     if (error.name !== 'AbortError' && !entry.cancelRequested && pendingFiles.includes(entry)) {
                         entry.status = 'error'; entry.xhr = null; renderQueue();
@@ -917,7 +975,7 @@
             }
         }
 
-        load(true);
+        Promise.all([loadFolders(), load(true)]).catch(() => {});
         fetch('/me')
             .then(response => response.ok ? response.json() : null)
             .then(user => {

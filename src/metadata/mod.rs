@@ -142,18 +142,6 @@ impl MetadataStore {
         Ok(folders)
     }
 
-    pub fn folder_name_exists(
-        &self,
-        owner_id: &str,
-        parent_id: Option<&str>,
-        name: &str,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        Ok(self
-            .list_child_folders(owner_id, parent_id)?
-            .into_iter()
-            .any(|folder| folder.name == name))
-    }
-
     pub fn create_folder(
         &self,
         owner_id: &str,
@@ -269,6 +257,20 @@ impl MetadataStore {
                 .is_some_and(|child| child.parent_id.as_deref() == Some(id))
         }) {
             return Err("Folder is not empty".into());
+        }
+        {
+            let files = transaction.open_table(FILES)?;
+            if files.iter()?.any(|entry| {
+                entry
+                    .ok()
+                    .and_then(|(_, value)| serde_json::from_str::<FileMetadata>(value.value()).ok())
+                    .is_some_and(|file| {
+                        file.owner_id.as_deref() == Some(owner_id)
+                            && file.folder_id.as_deref() == Some(id)
+                    })
+            }) {
+                return Err("Folder is not empty".into());
+            }
         }
         folders.remove(id)?;
         drop(folders);

@@ -306,15 +306,6 @@ impl App {
         self.metadata.get_file_for_owner(id, &user.id)
     }
 
-    pub fn list_files_for_user(
-        &self,
-        user: &UserAccount,
-    ) -> Result<Vec<FileMetadata>, Box<dyn std::error::Error>> {
-        let mut files = self.metadata.list_files_for_owner(&user.id)?;
-        files.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        Ok(files)
-    }
-
     pub fn list_files_for_user_in_folder(
         &self,
         user: &UserAccount,

@@ -64,6 +64,7 @@ struct FolderListResponse {
 #[derive(serde::Deserialize)]
 struct UploadQuery {
     relative_path: Option<String>,
+    folder_id: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -714,6 +715,15 @@ async fn upload_files(
         .relative_path
         .map(|path| validate_relative_upload_path(&path))
         .transpose()?;
+    let start_folder = match query.folder_id.as_deref() {
+        Some(id) => app
+            .user_folder(&user, id)
+            .map_err(|error| ApiError::internal("Read upload folder", error))?
+            .ok_or(ApiError::NotFound("Folder not found"))?,
+        None => app
+            .user_root_folder(&user)
+            .map_err(|error| ApiError::internal("Open upload folder", error))?,
+    };
     let upload_id = headers
         .get("x-upload-id")
         .and_then(|value| value.to_str().ok())
@@ -758,9 +768,11 @@ async fn upload_files(
         use crate::crypto::CHUNK_SIZE;
         use std::io::Write;
 
-        let filename = relative_path
+        let relative_path = relative_path
             .clone()
             .unwrap_or_else(|| field.file_name().unwrap_or("unknown").to_string());
+        let (filename, folder_id) =
+            resolve_upload_destination(&app, &user, &start_folder.id, Some(&relative_path))?;
         let id = crate::domain::id::id_16();
         // Keep track immediately so cancellation or a disconnected client removes partial data.
         // SAFETY: this guard owns the upload lifecycle until the metadata transaction commits.
@@ -839,11 +851,7 @@ async fn upload_files(
                 .map_err(|error| ApiError::internal("Read current time", error))?
                 .as_secs(),
             owner_id: Some(user.id.clone()),
-            folder_id: Some(
-                app.user_root_folder(&user)
-                    .map_err(|error| ApiError::internal("Open root folder", error))?
-                    .id,
-            ),
+            folder_id: Some(folder_id.clone()),
         };
 
         // Hold the upload state lock through publication so cancellation cannot race commit.
@@ -901,6 +909,44 @@ fn validate_folder_name(name: &str) -> Result<String, ApiError> {
         return Err(ApiError::BadRequest("Invalid folder name".into()));
     }
     Ok(name.to_owned())
+}
+
+fn resolve_upload_destination(
+    app: &App,
+    user: &UserAccount,
+    start_folder_id: &str,
+    relative_path: Option<&str>,
+) -> ApiResult<(String, String)> {
+    let path = relative_path.ok_or(ApiError::BadRequest("Missing upload filename".into()))?;
+    let path = validate_relative_upload_path(path)?;
+    let mut parts = path.split('/').peekable();
+    let mut folder_id = start_folder_id.to_owned();
+    let mut filename = None;
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            filename = Some(part.to_owned());
+            break;
+        }
+        let existing = app
+            .metadata
+            .list_child_folders(&user.id, Some(&folder_id))
+            .map_err(|error| ApiError::internal("List upload folders", error))?
+            .into_iter()
+            .find(|folder| folder.name == part);
+        folder_id = match existing {
+            Some(folder) => folder.id,
+            None => {
+                app.metadata
+                    .create_folder(&user.id, Some(&folder_id), part)
+                    .map_err(|error| ApiError::BadRequest(error.to_string()))?
+                    .id
+            }
+        };
+    }
+    Ok((
+        filename.ok_or(ApiError::BadRequest("Missing upload filename".into()))?,
+        folder_id,
+    ))
 }
 
 async fn cancel_upload(
@@ -1644,7 +1690,18 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert_eq!(uploaded.len(), 1);
-        assert_eq!(uploaded[0].filename, "project/hello.txt");
+        assert_eq!(uploaded[0].filename, "hello.txt");
+        let root = app.metadata.root_folder("test-user").unwrap().unwrap();
+        let folders = app
+            .metadata
+            .list_child_folders("test-user", Some(&root.id))
+            .unwrap();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].name, "project");
+        assert_eq!(
+            uploaded[0].folder_id.as_deref(),
+            Some(folders[0].id.as_str())
+        );
         let id = uploaded[0].id.clone();
 
         let response = create_router(app.clone())
