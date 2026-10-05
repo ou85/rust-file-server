@@ -281,6 +281,8 @@
         .selection-count:hover { background: #fff; border-color: #b9b9b5; box-shadow: 0 0 0 .125rem #eeeeec; }
         .selection-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; font-size: 1rem; line-height: 1; }
         .selection-action { min-width: 34px; padding: 0 10px; cursor: pointer; transition: border-color .12s ease, box-shadow .12s ease, transform .08s ease; }
+        .selection-action:disabled, .selection-move.disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+        .selection-move.disabled select { cursor: not-allowed; }
         .selection-action:hover { background: #fff; border-color: #b9b9b5; box-shadow: 0 0 0 .125rem #eeeeec; }
         .selection-count:active, .selection-action:active { transform: translateY(1px); }
         .selection-count:focus-visible, .selection-action:focus-visible { outline: 2px solid #75c995; outline-offset: 2px; }
@@ -389,7 +391,7 @@
         <div class="selection-action selection-move" aria-label="Move selected files"><span>Move</span><select id="moveFolderSelect" aria-label="Destination folder" onchange="moveSelected()"></select></div>
     </div>
     <section class="folder-browser" aria-label="Folders">
-        <div class="folder-browser-header"><div class="folder-breadcrumbs" id="folderBreadcrumbs"></div><div class="folder-header-actions"><div class="folder-selection-toolbar" id="folderSelectionToolbar"><button type="button" class="selection-count" onclick="clearFolderSelection()" aria-label="Clear selected folders"><span id="folderSelectionCount"></span><span class="selection-dismiss" aria-hidden="true"><img class="selection-animated-icon" src="/assets/icons/cancel-static.png" data-static-src="/assets/icons/cancel-static.png" data-animated-src="/assets/icons/cancel-48.gif" alt=""></span></button><button type="button" class="selection-action selection-delete" onclick="deleteSelectedFolders()" aria-label="Delete selected folders"><img class="selection-animated-icon" src="/assets/icons/trash-static.png" data-static-src="/assets/icons/trash-static.png" data-animated-src="/assets/icons/trash-48.gif" alt=""></button></div><button type="button" class="folder-new" onclick="createFolder()">New folder</button></div></div>
+        <div class="folder-browser-header"><div class="folder-breadcrumbs" id="folderBreadcrumbs"></div><div class="folder-header-actions"><button type="button" class="folder-new" onclick="createFolder()">New folder</button></div></div>
     </section>
     <table id="files" class="files-table"></table>
     <nav class="pagination" id="pagination" aria-label="File pages"></nav>
@@ -469,14 +471,11 @@
         }
 
         function updateFolderSelectionToolbar() {
-            const toolbar = document.getElementById('folderSelectionToolbar');
-            toolbar.classList.toggle('visible', selectedFolderIds.size > 0);
-            document.getElementById('folderSelectionCount').textContent = `${selectedFolderIds.size} ${selectedFolderIds.size === 1 ? 'folder' : 'folders'}`;
+            renderSelectionToolbar();
         }
 
         function clearFolderSelection() {
-            selectedFolderIds.clear();
-            renderFiles();
+            clearSelection();
         }
 
         async function renameFolder(folder) {
@@ -618,7 +617,6 @@
                 row.appendChild(actions); table.appendChild(row);
             });
             renderSelectionToolbar();
-            updateFolderSelectionToolbar();
         }
 
         function toggleFolderMenu(container, folder) {
@@ -665,18 +663,28 @@
 
         function renderSelectionToolbar() {
             const toolbar = document.getElementById('selectionToolbar');
-            const count = selectedIds.size;
+            const fileCount = selectedIds.size;
+            const folderCount = selectedFolderIds.size;
+            const count = fileCount + folderCount;
             toolbar.classList.toggle('visible', count > 0);
-            document.getElementById('selectionCount').textContent = `${count} ${count === 1 ? 'file' : 'files'}`;
+            document.getElementById('selectionCount').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
+            const download = document.querySelector('.selection-download');
+            download.disabled = folderCount > 0 || fileCount === 0;
+            download.title = folderCount > 0 ? 'Folders cannot be downloaded yet' : 'Download selected files';
+            const move = document.querySelector('.selection-move');
+            const moveSelect = document.getElementById('moveFolderSelect');
+            move.classList.toggle('disabled', folderCount > 0 || fileCount === 0);
+            moveSelect.disabled = folderCount > 0 || fileCount === 0;
         }
 
         function clearSelection() {
             selectedIds.clear();
+            selectedFolderIds.clear();
             renderFiles();
         }
 
         async function downloadSelected() {
-            if (downloadingSelection || selectedIds.size === 0) return;
+            if (downloadingSelection || selectedIds.size === 0 || selectedFolderIds.size > 0) return;
             downloadingSelection = true;
             const button = document.querySelector('.selection-download');
             button.disabled = true;
@@ -715,7 +723,7 @@
         document.getElementById('filePageSize').addEventListener('change', event => {
             pageSize = Number(event.target.value); currentPage = 1; load();
         });
-        document.querySelectorAll('#selectionToolbar .selection-count, #selectionToolbar .selection-download, #selectionToolbar .selection-delete, #folderSelectionToolbar .selection-count, #folderSelectionToolbar .selection-delete').forEach(button => {
+        document.querySelectorAll('#selectionToolbar .selection-count, #selectionToolbar .selection-download, #selectionToolbar .selection-delete').forEach(button => {
             const icon = button.querySelector('.selection-animated-icon');
             const showAnimation = () => { icon.src = icon.dataset.animatedSrc; };
             const showStatic = () => { icon.src = icon.dataset.staticSrc; };
@@ -964,23 +972,33 @@
         }
 
         function deleteSelected() {
-            const ids = [...selectedIds];
-            if (ids.length === 0) return;
-            showConfirmModal(`Permanently delete ${ids.length} selected ${ids.length === 1 ? 'file' : 'files'}?`, () => performBulkDelete(ids));
+            const fileIds = [...selectedIds];
+            const folderIds = [...selectedFolderIds];
+            const count = fileIds.length + folderIds.length;
+            if (count === 0) return;
+            showConfirmModal(`Permanently delete ${count} selected ${count === 1 ? 'item' : 'items'}?`, () => performBulkDelete(fileIds, folderIds));
         }
 
-        async function performBulkDelete(ids) {
-            const response = await fetch('/files', {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ids })
-            });
-            if (!response.ok) {
-                alert('Could not delete selected files.');
-                return;
+        async function performBulkDelete(fileIds, folderIds = []) {
+            let failedFiles = false;
+            let failedFolders = 0;
+            if (fileIds.length > 0) {
+                const response = await fetch('/files', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids: fileIds })
+                });
+                if (!response.ok) failedFiles = true;
             }
-            ids.forEach(id => selectedIds.delete(id));
-            load(true);
+            for (const id of folderIds) {
+                const response = await fetch(`/folders/${encodeURIComponent(id)}`, { method: 'DELETE' });
+                if (response.ok) selectedFolderIds.delete(id); else failedFolders++;
+            }
+            if (!failedFiles) fileIds.forEach(id => selectedIds.delete(id));
+            await Promise.all([load(true), loadFolders()]);
+            if (failedFiles || failedFolders) {
+                alert(`Could not delete ${failedFiles ? 'some files' : ''}${failedFiles && failedFolders ? ' or ' : ''}${failedFolders ? `${failedFolders} folder(s)` : ''}.`);
+            }
         }
 
         async function performDelete(id) {
