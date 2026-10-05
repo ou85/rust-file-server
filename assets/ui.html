@@ -139,6 +139,13 @@
             border: 1px solid #f1f3f4;
         }
         .modal-btn-no:hover { background: #e0e0e0; }
+        .folder-modal-box { width: min(24rem, calc(100vw - 2rem)); }
+        .folder-modal-title { margin: 0 0 .75rem; color: #202124; font-size: 1.1rem; font-weight: 600; }
+        .folder-modal-input { width: 100%; height: 2.5rem; margin-bottom: .35rem; padding: .5rem .7rem; border: 1px solid #c8c8c8; border-radius: .45rem; color: #222; font: inherit; }
+        .folder-modal-input:focus { outline: 2px solid #75c995; outline-offset: 1px; border-color: #43a563; }
+        .folder-modal-error { min-height: 1.2rem; margin: 0 0 .75rem; color: #c73d3d; font-size: .8rem; }
+        .folder-modal-create { background: #43a563; color: #fff; border: 1px solid #348b50; }
+        .folder-modal-create:hover { background: #378f54; }
         .progress-container {
             display: none;
             width: 100%;
@@ -196,7 +203,11 @@
         .folder-browser { margin: 1.5rem 0 0; border-top: 1px solid #e5e5e2; border-bottom: 1px solid #e5e5e2; background: #fafafa; }
         .folder-browser-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; min-height: 2.75rem; padding: .45rem .25rem; }
         .folder-breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; min-width: 0; font-size: .85rem; }
-        .folder-breadcrumbs button, .folder-new { border: 0; background: transparent; color: #333; cursor: pointer; font: inherit; }
+        .folder-breadcrumbs button, .folder-new { 
+            border: 0; background: transparent; color: #333; cursor: pointer; font: inherit; 
+            min-height: 2.5rem !important; 
+            padding: 0 1rem !important;
+        }
         .folder-breadcrumbs button:hover, .folder-new:hover { text-decoration: underline; }
         .folder-header-actions .folder-new { flex: none; width: auto; height: 2.125rem; min-height: 2.125rem; margin: 0; padding: .375rem .75rem; border: 1px solid #d0d0d0; border-radius: .5rem; background: #fff; color: #222; font: inherit; cursor: pointer; }
         .folder-new:hover { border-color: #b9b9b5; background: #f0f0f0; text-decoration: none; }
@@ -544,12 +555,38 @@
             await Promise.all([loadFolders(), load()]);
         }
 
-        async function createFolder() {
-            const name = prompt('Folder name:');
-            if (!name) return;
-            const response = await fetch('/folders', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ parent_id: currentFolderId, name }) });
-            if (!response.ok) { alert('Could not create folder.'); return; }
-            await loadFolders();
+        function createFolder() {
+            const modal = document.getElementById('folderCreateModal');
+            const input = document.getElementById('folderNameInput');
+            input.value = '';
+            document.getElementById('folderCreateError').textContent = '';
+            modal.classList.add('active');
+            window.setTimeout(() => input.focus(), 0);
+        }
+
+        function closeFolderCreateModal() {
+            document.getElementById('folderCreateModal').classList.remove('active');
+        }
+
+        async function submitCreateFolder() {
+            const input = document.getElementById('folderNameInput');
+            const error = document.getElementById('folderCreateError');
+            const name = input.value.trim();
+            if (!name) { error.textContent = 'Enter a folder name.'; input.focus(); return; }
+            const button = document.querySelector('.folder-modal-create');
+            button.disabled = true;
+            try {
+                const response = await fetch('/folders', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ parent_id: currentFolderId, name }) });
+                if (!response.ok) {
+                    const result = await response.json().catch(() => ({}));
+                    error.textContent = result.error || 'Could not create folder.';
+                    return;
+                }
+                closeFolderCreateModal();
+                await loadFolders();
+            } finally {
+                button.disabled = false;
+            }
         }
 
         async function loadStorage() {
@@ -927,6 +964,12 @@
         }
 
         document.addEventListener('keydown', event => {
+            const folderModal = document.getElementById('folderCreateModal');
+            if (event.key === 'Escape' && folderModal?.classList.contains('active')) {
+                event.preventDefault();
+                closeFolderCreateModal();
+                return;
+            }
             if (!document.getElementById('imageModal').classList.contains('active')) return;
             if (event.key === 'Escape' || event.key === ' ') { event.preventDefault(); closeImageModal(); }
             if (event.key === 'ArrowLeft') { event.preventDefault(); navigateImage(-1); }
@@ -1135,6 +1178,18 @@
             })
             .catch(() => {});
     </script>
+
+    <div class="modal-overlay" id="folderCreateModal" role="dialog" aria-modal="true" aria-labelledby="folderCreateTitle" onclick="if(event.target === this) closeFolderCreateModal()">
+        <div class="modal-box folder-modal-box" onclick="event.stopPropagation()">
+            <h3 class="folder-modal-title" id="folderCreateTitle">Create new folder</h3>
+            <input class="folder-modal-input" id="folderNameInput" type="text" maxlength="255" autocomplete="off" placeholder="Folder name" aria-label="Folder name" onkeydown="if(event.key === 'Enter') submitCreateFolder()">
+            <p class="folder-modal-error" id="folderCreateError" aria-live="polite"></p>
+            <div class="modal-actions">
+                <button class="modal-btn-no" type="button" onclick="closeFolderCreateModal()">Cancel</button>
+                <button class="modal-btn-yes folder-modal-create" type="button" onclick="submitCreateFolder()">Create</button>
+            </div>
+        </div>
+    </div>
 
     <div class="modal-overlay" id="confirmModal">
         <div class="modal-box">
