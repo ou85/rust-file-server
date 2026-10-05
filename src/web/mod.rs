@@ -48,6 +48,11 @@ struct FileListQuery {
     sort: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+struct UploadQuery {
+    relative_path: Option<String>,
+}
+
 #[derive(serde::Serialize)]
 struct FileListResponse {
     files: Vec<FileMetadata>,
@@ -593,9 +598,18 @@ async fn upload_files(
     jar: CookieJar,
     State(app): State<Arc<App>>,
     headers: HeaderMap,
+    query: Result<Query<UploadQuery>, QueryRejection>,
     multipart: Result<Multipart, MultipartRejection>,
 ) -> ApiResult<Json<Vec<FileMetadata>>> {
     let user = active_user(&jar, &app)?;
+    let Query(query) = query.map_err(|error| ApiError::RequestRejected {
+        status: error.status(),
+        message: error.body_text(),
+    })?;
+    let relative_path = query
+        .relative_path
+        .map(|path| validate_relative_upload_path(&path))
+        .transpose()?;
     let upload_id = headers
         .get("x-upload-id")
         .and_then(|value| value.to_str().ok())
@@ -640,7 +654,9 @@ async fn upload_files(
         use crate::crypto::CHUNK_SIZE;
         use std::io::Write;
 
-        let filename = field.file_name().unwrap_or("unknown").to_string();
+        let filename = relative_path
+            .clone()
+            .unwrap_or_else(|| field.file_name().unwrap_or("unknown").to_string());
         let id = crate::domain::id::id_16();
         // Keep track immediately so cancellation or a disconnected client removes partial data.
         // SAFETY: this guard owns the upload lifecycle until the metadata transaction commits.
@@ -746,6 +762,22 @@ async fn upload_files(
     }
 
     Ok(Json(uploaded))
+}
+
+fn validate_relative_upload_path(path: &str) -> Result<String, ApiError> {
+    if path.is_empty() || path.len() > 1024 || path.starts_with('/') || path.contains('\\') {
+        return Err(ApiError::BadRequest("Invalid relative upload path".into()));
+    }
+    let components: Vec<&str> = path.split('/').collect();
+    if components.iter().any(|component| {
+        component.is_empty()
+            || *component == "."
+            || *component == ".."
+            || component.chars().any(char::is_control)
+    }) {
+        return Err(ApiError::BadRequest("Invalid relative upload path".into()));
+    }
+    Ok(path.to_owned())
 }
 
 async fn cancel_upload(
@@ -1470,7 +1502,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/files/upload")
+                    .uri("/files/upload?relative_path=project%2Fhello.txt")
                     .header("cookie", user_cookie(&app))
                     .header(
                         "content-type",
@@ -1486,6 +1518,7 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert_eq!(uploaded.len(), 1);
+        assert_eq!(uploaded[0].filename, "project/hello.txt");
         let id = uploaded[0].id.clone();
 
         let response = create_router(app.clone())
